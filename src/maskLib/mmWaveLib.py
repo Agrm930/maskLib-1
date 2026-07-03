@@ -3,6 +3,7 @@
 Created on Tue Mar 26 13:46:48 2019
 
 @author: sasha
+Edited by Agrim, 2026 (adapters for removed MaskLib.corner/transformedQuadrants)
 """
 import numpy as np
 import math
@@ -12,7 +13,20 @@ from dxfwrite import DXFEngine as dxf
 from dxfwrite import const
 
 from maskLib.Entities import SolidPline, RoundRect, SkewRect
-from maskLib.utilities import kwargStrip
+from maskLib.utilities import kwargStrip, cornerRound, transformedQuadrants
+
+
+# Adapters for the legacy MaskLib.corner / MaskLib.transformedQuadrants call
+# conventions used throughout this module (those functions were removed from
+# MaskLib in 2026). The maintained versions live in maskLib.utilities with a
+# different argument order (radius before clockwise) and flag style
+# (vflip/hflip booleans instead of UD/LR signs); geometry is identical.
+def _corner(vertex, quadrant, clockwise, L, ptDensity):
+    return cornerRound(vertex, quadrant, L, clockwise=clockwise, ptDensity=ptDensity)
+
+
+def _transformedQuadrants(UD=1, LR=1):
+    return transformedQuadrants(vflip=(UD != 1), hflip=(LR != 1))
 
        
 # ===============================================================================
@@ -268,29 +282,29 @@ def CPS_Rounded(dwg,xy,w,s,L_res,L_rabbit,r_ins,RL,line_color,half=False,curve_p
     #print(half)
     #RL = 1 if right, -1 if left
         
-    q = m.transformedQuadrants(LR=RL)
+    q = _transformedQuadrants(LR=RL)
     #draw a cps resonator, dipole origin centered on (x,y) facing right
     pline = dxf.polyline(points = [(xy[0]+L_res*RL,xy[1])],color = line_color,flags=0)#1
-    pline.add_vertices(r_ins > 0 and m.corner((xy[0]+L_res*RL,xy[1]+s/2),q[1],-1*RL,r_ins,curve_pts//2) or [(xy[0]+L_res*RL,xy[1]+s/2)])#2
+    pline.add_vertices(r_ins > 0 and _corner((xy[0]+L_res*RL,xy[1]+s/2),q[1],-1*RL,r_ins,curve_pts//2) or [(xy[0]+L_res*RL,xy[1]+s/2)])#2
     if L_rabbit >= w/3: #draw top antenna
-        pline.add_vertices(half and [(xy[0]+RL*w_rabbit/2,xy[1] + s/2)] or m.corner((xy[0],xy[1] + s/2),q[3],1*RL,w_rabbit,curve_pts))#3
-        pline.add_vertices(half and [(xy[0]+RL*w_rabbit/2,xy[1] + s/2 + w_rabbit + L_rabbit)] or m.corner((xy[0],xy[1] + s/2 + w_rabbit + L_rabbit),q[2],1*RL,w_rabbit/3,curve_pts))#4
-        pline.add_vertices(m.corner((xy[0]+w_rabbit*RL,xy[1] + s/2 + w_rabbit + L_rabbit),q[1],1*RL,w_rabbit/3,curve_pts))#5
-        pline.add_vertices(r_ins > 0 and m.corner((xy[0]+w_rabbit,xy[1]+s/2+w),q[3],-1*RL,r_ins,curve_pts//2) or [(xy[0]+w_rabbit*RL,xy[1]+s/2+w)])#6
+        pline.add_vertices(half and [(xy[0]+RL*w_rabbit/2,xy[1] + s/2)] or _corner((xy[0],xy[1] + s/2),q[3],1*RL,w_rabbit,curve_pts))#3
+        pline.add_vertices(half and [(xy[0]+RL*w_rabbit/2,xy[1] + s/2 + w_rabbit + L_rabbit)] or _corner((xy[0],xy[1] + s/2 + w_rabbit + L_rabbit),q[2],1*RL,w_rabbit/3,curve_pts))#4
+        pline.add_vertices(_corner((xy[0]+w_rabbit*RL,xy[1] + s/2 + w_rabbit + L_rabbit),q[1],1*RL,w_rabbit/3,curve_pts))#5
+        pline.add_vertices(r_ins > 0 and _corner((xy[0]+w_rabbit,xy[1]+s/2+w),q[3],-1*RL,r_ins,curve_pts//2) or [(xy[0]+w_rabbit*RL,xy[1]+s/2+w)])#6
     else: #top stub only
-        pline.add_vertices(half and [(xy[0]+RL*w/2,xy[1] + s/2)] or m.corner((xy[0],xy[1] + s/2),q[3],1*RL,w/3,curve_pts))#3
-        pline.add_vertices(half and [(xy[0]+RL*w/2,xy[1] + s/2 + w)] or m.corner((xy[0],xy[1] + s/2 + w),q[2],1*RL,w/3,curve_pts))#4
-    pline.add_vertices(m.corner((xy[0]+ (L_res + w)*RL,xy[1] + s/2 + w),q[1],1*RL,w,curve_pts))#7
-    pline.add_vertices(m.corner((xy[0]+ (L_res + w)*RL,xy[1] - s/2 - w),q[4],1*RL,w,curve_pts))#8
+        pline.add_vertices(half and [(xy[0]+RL*w/2,xy[1] + s/2)] or _corner((xy[0],xy[1] + s/2),q[3],1*RL,w/3,curve_pts))#3
+        pline.add_vertices(half and [(xy[0]+RL*w/2,xy[1] + s/2 + w)] or _corner((xy[0],xy[1] + s/2 + w),q[2],1*RL,w/3,curve_pts))#4
+    pline.add_vertices(_corner((xy[0]+ (L_res + w)*RL,xy[1] + s/2 + w),q[1],1*RL,w,curve_pts))#7
+    pline.add_vertices(_corner((xy[0]+ (L_res + w)*RL,xy[1] - s/2 - w),q[4],1*RL,w,curve_pts))#8
     if L_rabbit >= w/3: #draw bottom antenna
-        pline.add_vertices(r_ins > 0 and m.corner((xy[0]+w_rabbit*RL,xy[1]-s/2-w),q[2],-1*RL,r_ins,curve_pts//2) or [(xy[0]+w_rabbit*RL,xy[1]-s/2-w)])#9
-        pline.add_vertices(m.corner((xy[0]+w_rabbit*RL,xy[1] - s/2 - w_rabbit - L_rabbit),q[4],1*RL,w_rabbit/3,curve_pts))#10
-        pline.add_vertices(half and [(xy[0]+RL*w_rabbit/2,xy[1] - s/2 - w_rabbit - L_rabbit)] or m.corner((xy[0],xy[1] - s/2 - w_rabbit - L_rabbit),q[3],1*RL,w_rabbit/3,curve_pts))#11
-        pline.add_vertices(half and [(xy[0]+RL*w_rabbit/2,xy[1] - s/2)] or m.corner((xy[0],xy[1] - s/2),q[2],1*RL,w_rabbit,curve_pts))#12
+        pline.add_vertices(r_ins > 0 and _corner((xy[0]+w_rabbit*RL,xy[1]-s/2-w),q[2],-1*RL,r_ins,curve_pts//2) or [(xy[0]+w_rabbit*RL,xy[1]-s/2-w)])#9
+        pline.add_vertices(_corner((xy[0]+w_rabbit*RL,xy[1] - s/2 - w_rabbit - L_rabbit),q[4],1*RL,w_rabbit/3,curve_pts))#10
+        pline.add_vertices(half and [(xy[0]+RL*w_rabbit/2,xy[1] - s/2 - w_rabbit - L_rabbit)] or _corner((xy[0],xy[1] - s/2 - w_rabbit - L_rabbit),q[3],1*RL,w_rabbit/3,curve_pts))#11
+        pline.add_vertices(half and [(xy[0]+RL*w_rabbit/2,xy[1] - s/2)] or _corner((xy[0],xy[1] - s/2),q[2],1*RL,w_rabbit,curve_pts))#12
     else: #bottom stub only
-        pline.add_vertices(half and [(xy[0]+RL*w/2,xy[1] - s/2 - w)] or m.corner((xy[0],xy[1] - s/2 - w),q[3],1*RL,w/3,curve_pts))#11
-        pline.add_vertices(half and [(xy[0]+RL*w/2,xy[1] - s/2)] or m.corner((xy[0],xy[1] - s/2),q[2],1*RL,w/3,curve_pts))#12
-    pline.add_vertices(r_ins > 0 and m.corner((xy[0]+L_res*RL,xy[1]-s/2),q[4],-1*RL,r_ins,curve_pts//2) or [(xy[0]+L_res*RL,xy[1]-s/2)])#13
+        pline.add_vertices(half and [(xy[0]+RL*w/2,xy[1] - s/2 - w)] or _corner((xy[0],xy[1] - s/2 - w),q[3],1*RL,w/3,curve_pts))#11
+        pline.add_vertices(half and [(xy[0]+RL*w/2,xy[1] - s/2)] or _corner((xy[0],xy[1] - s/2),q[2],1*RL,w/3,curve_pts))#12
+    pline.add_vertices(r_ins > 0 and _corner((xy[0]+L_res*RL,xy[1]-s/2),q[4],-1*RL,r_ins,curve_pts//2) or [(xy[0]+L_res*RL,xy[1]-s/2)])#13
     pline.close()
     dwg.add(pline)
 
@@ -298,19 +312,19 @@ def CPS_Rounded(dwg,xy,w,s,L_res,L_rabbit,r_ins,RL,line_color,half=False,curve_p
 def Paperclip_Rounded(dwg,xy,w,s,L_res,gap,r_ins,UD,line_color,curve_pts=30):
     #UD = 1 if gap on top, -1 if gap on bottom
     RL=1
-    q = m.transformedQuadrants(UD=UD)
+    q = _transformedQuadrants(UD=UD)
     #draw 
     pline = dxf.polyline(points = [(xy[0],xy[1])],color = line_color)
-    pline.add_vertices(r_ins > 0 and m.corner((xy[0]-RL*s/2,xy[1]),q[2],-1*UD,r_ins,curve_pts//2) or [(xy[0]-RL*s/2,xy[1])])
-    pline.add_vertices(r_ins > 0 and m.corner((xy[0]-RL*s/2,xy[1]-UD*L_res),q[3],-1*UD,r_ins,curve_pts//2) or [(xy[0]-RL*s/2,xy[1]-UD*L_res)])
-    pline.add_vertices(r_ins > 0 and m.corner((xy[0]+RL*s/2,xy[1]-UD*L_res),q[4],-1*UD,r_ins,curve_pts//2) or [(xy[0]+RL*s/2,xy[1]-UD*L_res)])
-    pline.add_vertices(m.corner((xy[0]+RL*s/2,xy[1]-UD*gap),q[2],1*UD,w/3,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+RL*(s/2+w),xy[1]-UD*gap),q[1],1*UD,w/3,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+RL*(s/2+w),xy[1]-UD*(L_res+w)),q[4],1*UD,w,curve_pts))
-    pline.add_vertices(m.corner((xy[0]-RL*(s/2+w),xy[1]-UD*(L_res+w)),q[3],1*UD,w,curve_pts))
-    pline.add_vertices(m.corner((xy[0]-RL*(s/2+w),xy[1]+UD*w),q[2],1*UD,w,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+RL*(s/2+w),xy[1]+UD*w),q[1],1*UD,w/3,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+RL*(s/2+w),xy[1]),q[4],1*UD,w/3,curve_pts))
+    pline.add_vertices(r_ins > 0 and _corner((xy[0]-RL*s/2,xy[1]),q[2],-1*UD,r_ins,curve_pts//2) or [(xy[0]-RL*s/2,xy[1])])
+    pline.add_vertices(r_ins > 0 and _corner((xy[0]-RL*s/2,xy[1]-UD*L_res),q[3],-1*UD,r_ins,curve_pts//2) or [(xy[0]-RL*s/2,xy[1]-UD*L_res)])
+    pline.add_vertices(r_ins > 0 and _corner((xy[0]+RL*s/2,xy[1]-UD*L_res),q[4],-1*UD,r_ins,curve_pts//2) or [(xy[0]+RL*s/2,xy[1]-UD*L_res)])
+    pline.add_vertices(_corner((xy[0]+RL*s/2,xy[1]-UD*gap),q[2],1*UD,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+RL*(s/2+w),xy[1]-UD*gap),q[1],1*UD,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+RL*(s/2+w),xy[1]-UD*(L_res+w)),q[4],1*UD,w,curve_pts))
+    pline.add_vertices(_corner((xy[0]-RL*(s/2+w),xy[1]-UD*(L_res+w)),q[3],1*UD,w,curve_pts))
+    pline.add_vertices(_corner((xy[0]-RL*(s/2+w),xy[1]+UD*w),q[2],1*UD,w,curve_pts))
+    pline.add_vertices(_corner((xy[0]+RL*(s/2+w),xy[1]+UD*w),q[1],1*UD,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+RL*(s/2+w),xy[1]),q[4],1*UD,w/3,curve_pts))
     
     pline.close()
 
@@ -320,13 +334,13 @@ def Paperclip_Rounded(dwg,xy,w,s,L_res,gap,r_ins,UD,line_color,curve_pts=30):
 def Spiral_Link_Rounded(dwg,xy,w,s,width,height,UD,line_color,r_ins=0,LR=1,curve_pts=30):
     #LR = 1 if coil goes clockwise and to the right, -1 if counterclockwise and to the left
     #UD = 1 if gap on top, -1 if gap on bottom
-    q =  m.transformedQuadrants(UD=UD,LR=LR)
+    q =  _transformedQuadrants(UD=UD,LR=LR)
     #draw 
     pline = dxf.polyline(points = [(xy[0],xy[1]-UD*(w+s/2))],color = line_color,flags=0) #start offset by w/2
-    pline.add_vertices(m.corner((xy[0],xy[1]+UD*height/2),q[2],1*UD*LR,w/3,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+LR*width,xy[1]+UD*height/2),q[1],1*UD*LR,w/3,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+LR*width,xy[1]-UD*height/2),q[4],1*UD*LR,w/3,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+LR*2*(w+s),xy[1]-UD*height/2),q[3],1*UD*LR,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0],xy[1]+UD*height/2),q[2],1*UD*LR,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+LR*width,xy[1]+UD*height/2),q[1],1*UD*LR,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+LR*width,xy[1]-UD*height/2),q[4],1*UD*LR,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+LR*2*(w+s),xy[1]-UD*height/2),q[3],1*UD*LR,w/3,curve_pts))
     pline.add_vertices([(xy[0]+LR*2*(w+s),xy[1]-UD*(w+s/2)),
                         (xy[0]+LR*(3*w+2*s),xy[1]-UD*(w+s/2)),
                         (xy[0]+LR*(3*w+2*s),xy[1]-UD*(height/2-w)),
@@ -355,16 +369,16 @@ def DoubleSpiral(dwg,xy,w,s,width,turns,UD,line_color,r_ins=0,LR=1,curve_pts=30)
         Spiral_Link_Rounded(dwg,(xy[0]+LR*(w+s+n*2*(w+s)),xy[1]),w,s,width-4*n*(w+s)-2*w-2*s,height-4*n*(w+s)-2*w-2*s,UD,line_color,r_ins=r_ins,LR=LR)#inner spiral
     
     #UD = 1 if gap on top, -1 if gap on bottom
-    q = m.transformedQuadrants(UD=UD,LR=LR)
+    q = _transformedQuadrants(UD=UD,LR=LR)
     #recenter
     xy = (xy[0]+LR*(w+s+(turns-1)*2*(w+s)),xy[1]-UD*(w+s/2))
     #draw 
     pline = dxf.polyline(points = [(xy[0],xy[1])],color = line_color,flags=0) #start offset by w/2
-    pline.add_vertices(m.corner((xy[0],xy[1]+UD*(2*w+s)),q[2],1*UD*LR,w/3,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+LR*(width-2*(2*turns-1)*(w+s)),xy[1]+UD*(2*w+s)),q[1],1*UD*LR,w/3,curve_pts))
-    pline.add_vertices(m.corner((xy[0]+LR*(width-2*(2*turns-1)*(w+s)),xy[1]),q[4],1*UD*LR,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0],xy[1]+UD*(2*w+s)),q[2],1*UD*LR,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+LR*(width-2*(2*turns-1)*(w+s)),xy[1]+UD*(2*w+s)),q[1],1*UD*LR,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+LR*(width-2*(2*turns-1)*(w+s)),xy[1]),q[4],1*UD*LR,w/3,curve_pts))
     pline.add_vertices([(xy[0]+LR*(w+s),xy[1])])
-    pline.add_vertices(m.corner((xy[0]+LR*(w+s),xy[1]+UD*w),q[2],1*UD*LR,w/3,curve_pts))
+    pline.add_vertices(_corner((xy[0]+LR*(w+s),xy[1]+UD*w),q[2],1*UD*LR,w/3,curve_pts))
     pline.add_vertices([(xy[0]+LR*(width-2*(2*turns-1)*(w+s)-w),xy[1]+UD*w),
                         (xy[0]+LR*(width-2*(2*turns-1)*(w+s)-w),xy[1]+UD*(w+s)),
                         (xy[0]+LR*w,xy[1]+UD*(w+s)),

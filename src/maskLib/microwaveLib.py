@@ -17,15 +17,14 @@ from dxfwrite.entities import Polyline
 from dxfwrite.vector2d import vadd, midpoint ,vsub, vector2angle, magnitude, distance
 from dxfwrite.algebra import rotate_2d
 
-from maskLib.Entities import SolidPline, SkewRect, CurveRect, RoundRect, InsideCurve, DogBone
+from maskLib.Entities import SolidPline, SkewRect, CurveRect, RoundRect, InsideCurve
 from maskLib.utilities import kwargStrip, curveAB
-
+from maskLib.point_logger import log_points 
 from copy import deepcopy
 from matplotlib.path import Path
 from matplotlib.transforms import Bbox
 import math
 from copy import copy
-import numpy as np 
 
 # ===============================================================================
 # perforate the ground plane with a grid of squares, which avoid any polylines 
@@ -96,7 +95,7 @@ def waffle(chip, grid_x, grid_y=None,width=10,height=None,exclude=None,padx=0,pa
                             second_pass[ip][jp] = True
                         except IndexError:
                             pass
-        occupied = deepcopy(second_pass)
+        second_pass = deepcopy(second_pass)
    
     for i in range(int(padx/grid_x),nx-int(padx/grid_x)):
         for j in range(int(pady/grid_y),ny-int(pady/grid_y)):
@@ -105,6 +104,92 @@ def waffle(chip, grid_x, grid_y=None,width=10,height=None,exclude=None,padx=0,pa
                 chip.add(dxf.rectangle(pos,width,height,bgcolor=chip.wafer.bg(layer),halign=const.CENTER,valign=const.MIDDLE,layer=layer) )   
                 
     return chip
+
+def waffle_bumpbond(chip, grid_x, grid_y=None, width=10, height=None, exclude=None, padx=0, pady=None, bleedRadius=1, layer1='140_IUBM',
+                    layer2='40_UBM', layer3='45_BUMP', num_bumps=1):
+    radius = max(int(bleedRadius), 0)
+
+    if exclude is None:
+        exclude = ['FRAME', '703_ChipEdge', '101_IPOST', '103_IPOSTCLEAN', '12_DELBUMP']
+    else:
+        exclude.append('FRAME')
+
+    if grid_y is None:
+        grid_y = grid_x
+
+    if height is None:
+        height = width
+
+    if pady is None:
+        pady = padx
+
+    nx, ny = list(map(int, [(chip.width) / grid_x, (chip.height) / grid_y]))
+    occupied = [[False] * ny for i in range(nx)]
+    for i in range(nx):
+        occupied[i][0] = True
+        occupied[i][-1] = True
+    for i in range(ny):
+        occupied[0][i] = True
+        occupied[-1][i] = True
+
+    for e in chip.chipBlock.get_data():
+        if isinstance(e.__dxftags__()[0], Polyline):
+            if e.layer not in exclude:
+                o_x_list = []
+                o_y_list = []
+                plinePts = [v.__getitem__('location').__getitem__('xy') for v in e.__dxftags__()[0].get_data()]
+                plinePts.append(plinePts[0])
+                for p in plinePts:
+                    o_x, o_y = list(map(int, (p[0] / grid_x, p[1] / grid_y)))
+                    if 0 <= o_x < nx and 0 <= o_y < ny:
+                        o_x_list.append(o_x)
+                        o_y_list.append(o_y)
+
+                        # this will however ignore a rectangle with corners outside the chip...
+                if o_x_list:
+                    path = Path([[pt[0] / grid_x, pt[1] / grid_y] for pt in plinePts], closed=True)
+                    for x in range(min(o_x_list) - 1, max(o_x_list) + 2):
+                        for y in range(min(o_y_list) - 1, max(o_y_list) + 2):
+                            try:
+                                if path.contains_point([x + .5, y + .5]):
+                                    occupied[x][y] = True
+                                elif path.intersects_bbox(Bbox.from_bounds(x, y, 1., 1.), filled=True):
+                                    occupied[x][y] = True
+                            except IndexError:
+                                pass
+
+    second_pass = deepcopy(occupied)
+    for r in range(radius):
+        for i in range(nx):
+            for j in range(ny):
+                if occupied[i][j]:
+                    for ip, jp in [(i + 1, j), (i - 1, j), (i, j + 1), (i, j - 1)]:
+                        try:
+                            second_pass[ip][jp] = True
+                        except IndexError:
+                            pass
+        second_pass = deepcopy(second_pass)
+
+    for i in range(int(padx / grid_x), nx - int(padx / grid_x)):
+        for j in range(int(pady / grid_y), ny - int(pady / grid_y)):
+            if not second_pass[i][j]:
+                pos = i * grid_x + grid_x / 2., j * grid_y + grid_y / 2.
+                create_bumpbond(chip=chip, pos=pos, width=width, height=height, radius=7.5, layer1=layer1, layer2=layer2, layer3=layer3, num_bumps=num_bumps)
+    return chip
+
+def create_bumpbond(chip, pos, width, height, radius, layer1, layer2, layer3, num_bumps=1):
+    chip.add(dxf.rectangle(pos, width, height, bgcolor=chip.wafer.bg(), halign=const.CENTER, valign=const.MIDDLE,
+                      layer=layer1))
+    chip.add(dxf.rectangle(pos, width, height, bgcolor=chip.wafer.bg(), halign=const.CENTER, valign=const.MIDDLE,
+                      layer=layer2))
+    #Unable to use, because circle only creates a polyline with 32 sides, while LL requires the polyline to have 40-50 sides
+    # chip.add(dxf.circle(radius=7.5, center=pos, bgcolor=chip.wafer.bg(), layer=layer3))
+    initial_pos = pos
+    for i in range(num_bumps):
+        pos = (initial_pos[0] - radius - (20+2*radius)*(i-math.floor(num_bumps/2)), initial_pos[1] - radius)
+        chip.add(RoundRect(pos, height=radius*2, radius=radius, width=radius*2, roundCorners=[1, 1, 1, 1],
+                  rotation=0, ptDensity=45, layer=layer3))
+
 
 # ===============================================================================
 # basic POSITIVE microstrip function definitions
@@ -126,7 +211,64 @@ def Strip_straight(chip,structure,length,w=None,bgcolor=None,**kwargs): #note: u
         except KeyError:
             print('\x1b[33ms not defined in ',chip.chipID,'!\x1b[0m')
     
+    # Calculate rectangle corners for logging
+    x0, y0 = struct().start
+    angle_rad = math.radians(struct().direction)
+    dx = length * math.cos(angle_rad)
+    dy = length * math.sin(angle_rad)
+    wx = (w/2) * math.sin(angle_rad)
+    wy = (w/2) * math.cos(angle_rad)
+    corners = [
+        (x0 - wx, y0 + wy),
+        (x0 + dx - wx, y0 + dy + wy),
+        (x0 + dx + wx, y0 + dy - wy),
+        (x0 + wx, y0 - wy),
+    ]
+    log_points(corners)
+
     chip.add(dxf.rectangle(struct().start,length,w,valign=const.MIDDLE,rotation=struct().direction,bgcolor=bgcolor,**kwargStrip(kwargs)),structure=structure,length=length)
+
+#straights strip with contact pads for ease of use. unfinished*** finished hastily by Tom
+def Strip_contact(chip,structure,length,contactTop=True,contactBot=True,w=None,bgcolor=None,**kwargs): #note: uses CPW conventions
+    def struct():
+        if isinstance(structure,m.Structure):
+            return structure
+        elif isinstance(structure,tuple):
+            return m.Structure(chip,structure)
+        else:
+            return chip.structure(structure)
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w is None:
+        try:
+            w = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33ms not defined in ',chip.chipID,'!\x1b[0m')
+    
+    chip.add(dxf.rectangle(struct().start,length,w,valign=const.TOP,rotation=struct().direction,bgcolor=bgcolor,**kwargStrip(kwargs)),structure=structure,length=length)
+   
+    contactW=20 if 'contactW' not in kwargs else kwargs['contactW']
+    contactL=10 if 'contactL' not in kwargs else kwargs['contactL']
+    wedgeL=10 if 'wedgeL' not in kwargs else kwargs['wedgeL']
+
+    # Adjust the sign of contactL and wedgeL based on the sign of w
+    contactL = math.copysign(contactL, w)
+    wedgeL = math.copysign(wedgeL, w)
+
+    drawstart=(struct().start[0]-0.5,struct().start[1]+w+contactL+wedgeL)
+    contact_points=[
+                (drawstart[0] + contactW/2, drawstart[1]),
+                (drawstart[0] + contactW/2, drawstart[1] - wedgeL),
+                (drawstart[0] + length/2, drawstart[1] - contactL - wedgeL),
+                (drawstart[0] - length/2, drawstart[1] - contactL -wedgeL),
+                (drawstart[0] - contactW/2, drawstart[1] - wedgeL),
+                (drawstart[0] - contactW/2, drawstart[1])
+            ]
+    contact = dxf.polyline(points=contact_points,**kwargStrip(kwargs))
+    contact.close()
+    
+    chip.add(contact)
+
 
 def Strip_taper(chip,structure,length=None,w0=None,w1=None,bgcolor=None,offset=(0,0),**kwargs): #note: uses CPW conventions
     def struct():
@@ -214,7 +356,7 @@ def Strip_stub_open(chip,structure,flipped=False,curve_out=True,r_out=None,w=Non
         dx = 0.
         if flipped:
             if allow_oversize:
-                dx = max(length,r_out)
+                dx = r_out
             else:
                 dx = min(w/2,r_out)
         
@@ -225,7 +367,7 @@ def Strip_stub_open(chip,structure,flipped=False,curve_out=True,r_out=None,w=Non
         
         if length is None: length=0
 
-        chip.add(RoundRect(struct().getPos((dx,0)),max(length,l),w,l,roundCorners=[0,curve_out,curve_out,0],hflip=flipped,valign=const.MIDDLE,rotation=struct().direction,bgcolor=bgcolor,**kwargs),structure=structure,length=max(l,length))
+        chip.add(RoundRect(struct().getPos((dx,0)),max(length,l),w,l,roundCorners=[0,curve_out,curve_out,0],hflip=flipped,valign=const.MIDDLE,rotation=struct().direction,bgcolor=bgcolor,**kwargs),structure=structure,length=l)
     else:
         if length is not None:
             if allow_oversize:
@@ -261,8 +403,8 @@ def Strip_stub_short(chip,structure,r_ins=None,w=None,flipped=False,extra_straig
     if r_ins > 0:
         if extra_straight_section and not flipped:
             Strip_straight(chip, struct(), r_ins, w=w,rotation=struct().direction,bgcolor=bgcolor,**kwargs)
-        chip.add(InsideCurve(struct().getPos((0,-w/2)),r_ins,rotation=struct().direction,hflip=flipped,bgcolor=bgcolor,**kwargs))
-        chip.add(InsideCurve(struct().getPos((0,w/2)),r_ins,rotation=struct().direction,hflip=flipped,vflip=True,bgcolor=bgcolor,**kwargs))
+        chip.add(InsideCurve(struct().getPos((0,w/2)),r_ins,rotation=struct().direction,hflip=flipped,bgcolor=bgcolor,**kwargs))
+        chip.add(InsideCurve(struct().getPos((0,-w/2)),r_ins,rotation=struct().direction,hflip=flipped,vflip=True,bgcolor=bgcolor,**kwargs))
         if extra_straight_section and flipped:
                 Strip_straight(chip, struct(), r_ins, w=w,rotation=struct().direction,bgcolor=bgcolor,**kwargs)
 
@@ -335,8 +477,6 @@ def CPW_straight(chip,structure,length,w=None,s=None,bondwires=False,bond_pitch=
     
     chip.add(dxf.rectangle(struct().getPos((0,-w/2)),length,-s,rotation=struct().direction,bgcolor=bgcolor,**kwargStrip(kwargs)))
     chip.add(dxf.rectangle(struct().getPos((0,w/2)),length,s,rotation=struct().direction,bgcolor=bgcolor,**kwargStrip(kwargs)),structure=structure,length=length)
-
-    return struct().getPos()
         
 def CPW_taper(chip,structure,length=None,w0=None,s0=None,w1=None,s1=None,bgcolor=None,offset=(0,0),**kwargs): #note: uses CPW conventions
     def struct():
@@ -433,7 +573,7 @@ def CPW_stub_short(chip,structure,flipped=False,curve_ins=True,curve_out=True,r_
             l=s/2
         CPW_straight(chip,structure,l,w=w,s=s,bgcolor=bgcolor,**kwargs)
         
-def CPW_stub_open(chip,structure,length=0,r_out=None,r_ins=None,w=None,s=None,flipped=False,extra_straight_section=False,bgcolor=None, polygon_overlap=False, **kwargs):
+def CPW_stub_open(chip,structure,length=0,r_out=None,r_ins=None,w=None,s=None,flipped=False,extra_straight_section=False,bgcolor=None,**kwargs):
     def struct():
         if isinstance(structure,m.Structure):
             return structure
@@ -475,10 +615,8 @@ def CPW_stub_open(chip,structure,length=0,r_out=None,r_ins=None,w=None,s=None,fl
     if r_ins > 0:
         if extra_straight_section and not flipped:
             CPW_straight(chip, struct(), r_ins, w=w,s=s,rotation=struct().direction,bgcolor=bgcolor,**kwargs)
-        d_angle = 0
-        if polygon_overlap: d_angle = 0.03
-        chip.add(InsideCurve(struct().getPos((dx,w/2)),r_ins, angle=90+d_angle, rotation=struct().direction - d_angle/2,hflip=flipped,bgcolor=bgcolor,**kwargs))
-        chip.add(InsideCurve(struct().getPos((dx,-w/2)),r_ins, angle=90+d_angle, rotation=struct().direction + d_angle/2,hflip=flipped,vflip=True,bgcolor=bgcolor,**kwargs))
+        chip.add(InsideCurve(struct().getPos((dx,w/2)),r_ins,rotation=struct().direction,hflip=flipped,bgcolor=bgcolor,**kwargs))
+        chip.add(InsideCurve(struct().getPos((dx,-w/2)),r_ins,rotation=struct().direction,hflip=flipped,vflip=True,bgcolor=bgcolor,**kwargs))
 
     chip.add(RoundRect(struct().getPos((dx,0)),length,w+2*s,min(r_out,length),roundCorners=[0,1,1,0],hflip=flipped,valign=const.MIDDLE,rotation=struct().direction,bgcolor=bgcolor,**kwargs),structure=structure,length=length)
     if extra_straight_section and flipped:
@@ -514,8 +652,8 @@ def CPW_cap(chip,structure,gap,r_ins=None,w=None,s=None,bgcolor=None,angle=90,**
     if r_ins > 0:
         chip.add(InsideCurve(struct().getPos((0,w/2)),r_ins,rotation=struct().direction + 90,vflip=True,angle=angle,bgcolor=bgcolor,**kwargs))
         chip.add(InsideCurve(struct().getPos((0,-w/2)),r_ins,rotation=struct().direction - 90,angle=angle,bgcolor=bgcolor,**kwargs))
-        chip.add(InsideCurve(struct().getPos((gap,w/2)),r_ins,rotation=struct().direction + 90,angle=angle,bgcolor=bgcolor,**kwargs))
-        chip.add(InsideCurve(struct().getPos((gap,-w/2)),r_ins,rotation=struct().direction - 90,vflip=True,angle=angle,bgcolor=bgcolor,**kwargs))
+        # chip.add(InsideCurve(struct().getPos((gap,w/2)),r_ins,rotation=struct().direction + 90,angle=angle,bgcolor=bgcolor,**kwargs))
+        # chip.add(InsideCurve(struct().getPos((gap,-w/2)),r_ins,rotation=struct().direction - 90,vflip=True,angle=angle,bgcolor=bgcolor,**kwargs))
 
     chip.add(dxf.rectangle(struct().start,gap,w+2*s,valign=const.MIDDLE,rotation=struct().direction,bgcolor=bgcolor,**kwargStrip(kwargs)),structure=structure,length=gap)
 
@@ -611,7 +749,7 @@ def CPW_bend(chip,structure,angle=90,CCW=True,w=None,s=None,radius=None,ptDensit
             Airbridge(chip, this_struct, br_radius=radius, clockwise=clockwise, **kwargs)
 
 
-def CPW_tee(chip,structure,w=None,s=None,radius=None,r_ins=None,w1=None,s1=None,bgcolor=None,hflip=False,branch_off=const.CENTER, polygon_overlap=False, **kwargs):
+def CPW_tee(chip,structure,w=None,s=None,radius=None,r_ins=None,w1=None,s1=None,bgcolor=None,hflip=False,branch_off=const.CENTER,**kwargs):
     
     def struct():
         if isinstance(structure,m.Structure):
@@ -689,10 +827,8 @@ def CPW_tee(chip,structure,w=None,s=None,radius=None,r_ins=None,w1=None,s1=None,
             chip.add(dxf.rectangle(struct().getPos((0,w/2+radius)),hflip and -radius or radius,(s-s1),rotation=struct().direction,bgcolor=bgcolor,**kwargStrip(kwargs)))
     if radius <= min(s,s1) and r_ins > 0:
         #inside edges are square
-        d_angle = 0
-        if polygon_overlap: d_angle = 0.03
-        chip.add(InsideCurve(struct().getPos((0,w/2+s)),r_ins,hflip=hflip,vflip=True,ralign=const.TOP, angle=90+d_angle, rotation=struct().direction + d_angle/2, bgcolor=bgcolor,**kwargs))
-        chip.add(InsideCurve(struct().getPos((0,-w/2-s)),r_ins,hflip=hflip,vflip=False,ralign=const.TOP, angle=90+d_angle, rotation=struct().direction - d_angle/2, bgcolor=bgcolor,**kwargs))
+        chip.add(InsideCurve(struct().getPos((0,w/2+s)),r_ins,hflip=hflip,vflip=True,ralign=const.TOP,rotation=struct().direction,bgcolor=bgcolor,**kwargs))
+        chip.add(InsideCurve(struct().getPos((0,-w/2-s)),r_ins,hflip=hflip,vflip=False,ralign=const.TOP,rotation=struct().direction,bgcolor=bgcolor,**kwargs))
     
     
     if branch_off == const.CENTER:  
@@ -811,7 +947,7 @@ def CPW_pad(chip,struct,l_pad=0,l_gap=0,padw=300,pads=50,l_lead=None,w=None,s=No
 
 def CPW_launcher(chip,struct,l_taper=None,l_pad=0,l_gap=0,padw=300,pads=160,w=None,s=None,r_ins=0,r_out=0,bgcolor=None,**kwargs):
     CPW_stub_open(chip,struct,length=max(l_gap,pads),r_out=r_out,r_ins=r_ins,w=padw,s=pads,flipped=True,**kwargs)
-    CPW_straight(chip,struct,max(l_pad,padw),w=padw,s=pads,**kwargs)
+    CPW_straight(chip,struct,l_pad,w=padw,s=pads,**kwargs)
     CPW_taper(chip,struct,length=l_taper,w0=padw,s0=pads,**kwargs)
 
 def CPW_taper_cap(chip,structure,gap,width,l_straight=0,l_taper=None,s1=None,**kwargs):
@@ -975,7 +1111,13 @@ def wiggle_calc(chip,structure,length=None,nTurns=None,maxWidth=None,Width=None,
                 h = (length - nTurns*2*math.pi*radius - (start_bend+stop_bend)*(math.pi/2-1)*radius)/(4*nTurns)
     else: #length is not contrained
         h= maxWidth-radius-w/2-s
-    h = max(h,radius)
+    if h<radius:
+        print("WARNING: straight segment is shorter than the radius, possible bad CPW resonator")
+    # h = max(h,radius)
+    # Commented out by CD on 4/14/2025 - not sure why the straight segment needs to be longer than the curved segment,
+    # likely for a microwave engineering reason. But I think the alternative is significantly worse, because it just
+    # gives the wrong resonator length if n_turns is too large.
+
     return {'nTurns':nTurns,'h':h,'length':length,'maxWidth':maxWidth,'Width':Width}
 
 def CPW_wiggles(chip,structure,length=None,nTurns=None,maxWidth=None,CCW=True,start_bend = True,stop_bend=True,w=None,s=None,radius=None,bgcolor=None,debug=False,**kwargs):
@@ -1198,7 +1340,7 @@ def TwoPinCPW_wiggles(chip,structure,w=None,s_ins=None,s_out=None,s=None,Width=N
     Inductor_wiggles(chip, s0, w=s_ins+2*w,Width=Width,maxWidth=maxWidth,**kwargs)
     Strip_wiggles(chip, struct(), w=s_ins,maxWidth=maxWidth-w,**kwargs)
 
-def CPW_pincer(chip,structure,pincer_w,pincer_l,pincer_padw,pincer_tee_r=0,pad_r=None,w=None,s=None,pincer_flipped=False,bgcolor=None, polygon_overlap=True, **kwargs):
+def CPW_pincer(chip,structure,pincer_w,pincer_l,pincer_padw,pincer_tee_r=0,pad_r=None,w=None,s=None,pincer_flipped=False,bgcolor=None,**kwargs):
     '''
     pincer_w :      
     pincer_l :      length of pincer arms
@@ -1237,10 +1379,10 @@ def CPW_pincer(chip,structure,pincer_w,pincer_l,pincer_padw,pincer_tee_r=0,pad_r
     if not pincer_flipped: s_start = struct().clone()
     else:
         struct().shiftPos(pincer_padw+pincer_tee_r+2*s,angle=180)
+        #struct().direction += 180
         s_start = struct().clone()
 
-
-    s_left, s_right = CPW_tee(chip, struct(), w=w, s=s, w1=pincer_padw, s1=s, radius=pincer_tee_r + s, polygon_overlap=polygon_overlap, **kwargs)
+    s_left, s_right = CPW_tee(chip, struct(), w=w, s=s, w1=pincer_padw, s1=s, radius=pincer_tee_r + s, **kwargs)
 
     CPW_straight(chip, s_left, length=(pincer_w-w-2*s-2*pincer_tee_r)/2-pad_r, **kwargs)
     CPW_straight(chip, s_right, length=(pincer_w-w-2*s-2*pincer_tee_r)/2-pad_r, **kwargs)
@@ -1248,11 +1390,11 @@ def CPW_pincer(chip,structure,pincer_w,pincer_l,pincer_padw,pincer_tee_r=0,pad_r
     if pincer_l > s:
         CPW_bend(chip, s_left, CCW=True, w=pincer_padw, s=s, radius=pincer_r, **kwargs)
         CPW_straight(chip, s_left, length=pincer_l - s-pad_r, **kwargs)
-        CPW_stub_open(chip, s_left, w=pincer_padw, s=s, polygon_overlap=polygon_overlap, **kwargs)
+        CPW_stub_open(chip, s_left, w=pincer_padw, s=s, **kwargs)
 
         CPW_bend(chip, s_right, CCW=False, w=pincer_padw, s=s, radius=pincer_r, **kwargs)
         CPW_straight(chip, s_right, length=pincer_l - s-pad_r, **kwargs)
-        CPW_stub_open(chip, s_right, w=pincer_padw, s=s, polygon_overlap=polygon_overlap, **kwargs)
+        CPW_stub_open(chip, s_right, w=pincer_padw, s=s, **kwargs)
     else:
         s_left = s_left.cloneAlong(vector=(0,pincer_padw/2+s/2))
         Strip_bend(chip, s_left, CCW=True, w=s, radius=pincer_r + pincer_padw/2 - s/2, **kwargs)
@@ -1272,69 +1414,25 @@ def CPW_pincer(chip,structure,pincer_w,pincer_l,pincer_padw,pincer_tee_r=0,pad_r
     else: 
         struct().updatePos(s_start.getPos(),angle=180)
         #struct.direction = s_start.direction + 180
-        
-def CPW_tee_stub(chip,structure,stub_length,stub_w,tee_r=0,outer_width=None,w=None,s=None,pincer_flipped=False,bgcolor=None,**kwargs):
-    '''
-    stub_length :    end-to-end length of stub pin (not counting gap) 
-    stub_w :   pincer pad trace width
-    pincer_tee_r :  radius of tee
-    pad_r:          inside radius of pincer bends
-    w:              original trace width
-    s:              pincer trace gap
-    pincer_flipped: equivalent to hflip
-    '''
-    def struct():
-        if isinstance(structure,m.Structure):
-            return structure
-        elif isinstance(structure,tuple):
-            return m.Structure(chip,structure)
-        else:
-            return chip.structure(structure)
-    if w is None:
-        try:
-            w = struct().defaults['w']
-        except KeyError:
-            w=0
-            print('\x1b[33mw not defined in ',chip.chipID)
-    if s is None:
-        try:
-            s = struct().defaults['s']
-        except KeyError:
-            print('\x1b[33ms not defined in ',chip.chipID,'!\x1b[0m')
-        
-    if not pincer_flipped: s_start = struct().clone()
-    else:
-        struct().shiftPos(stub_w+2*s,angle=180)
-        #struct().direction += 180
-        s_start = struct().clone()
-
-    s_left, s_right = CPW_tee(chip, struct(), w=w, s=s, w1=stub_w, s1=s, radius=tee_r + s, **kwargs)
-
-    CPW_straight(chip, s_left, length=(stub_length-w-2*s-stub_w)/2, **kwargs)
-    CPW_stub_round(chip, s_left,**kwargs)
-    CPW_straight(chip, s_right, length=(stub_length-w-2*s-stub_w)/2, **kwargs)
-    CPW_stub_round(chip, s_right,**kwargs)
-
-    if not pincer_flipped:
-        s_start.shiftPos(stub_w+2*s)
-        struct().updatePos(s_start.getPos())
-    else: 
-        struct().updatePos(s_start.getPos(),angle=180)
-        #struct.direction = s_start.direction + 180
     
 # ===============================================================================
 # Airbridges (Lincoln Labs designs)
 # ===============================================================================
-def setupAirbridgeLayers(wafer:m.Wafer,BRLAYER='BRIDGE',RRLAYER='TETHER',brcolor=41,rrcolor=32):
+def setupAirbridgeLayers(wafer:m.Wafer,BRLAYER='BRIDGE',RRLAYER='TETHER',brcolor=41,rrcolor=32,IBRLAYER='BRIDGE',IRRLAYER='TETHER',ibrcolor=41,irrcolor=32):
     #add correct layers to wafer, and cache layer
     wafer.addLayer(BRLAYER,brcolor)
     wafer.BRLAYER=BRLAYER
     wafer.addLayer(RRLAYER,rrcolor)
     wafer.RRLAYER=RRLAYER
+    wafer.addLayer(IBRLAYER,ibrcolor)
+    wafer.IBRLAYER=IBRLAYER
+    wafer.addLayer(IRRLAYER,irrcolor)
+    wafer.IRRLAYER=IRRLAYER
 
 def Airbridge(
     chip, structure, cpw_w=None, cpw_s=None, xvr_width=None, xvr_length=None, rr_width=None, rr_length=None,
-    rr_br_gap=None, rr_cpw_gap=None, shape_overlap=0, br_radius=0, clockwise=False, lincolnLabs=False, BRLAYER=None, RRLAYER=None, **kwargs):
+    rr_br_gap=None, rr_cpw_gap=None, shape_overlap=0, br_radius=0, clockwise=False, lincolnLabs=False, BRLAYER=None,
+        RRLAYER=None, IBRLAYER=None, IRRLAYER=None,  layer=None, **kwargs):
     """
     Define either cpw_w and cpw_s (refers to the cpw that the airbridge goes across) or xvr_length.
     xvr_length overrides cpw_w and cpw_s.
@@ -1359,18 +1457,45 @@ def Airbridge(
             print('\x1b[33ms not defined in ',chip.chipID)
 
     #get layers from wafer
-    if BRLAYER is None:
-        try:
-            BRLAYER = chip.wafer.BRLAYER
-        except AttributeError:
-            setupAirbridgeLayers(chip.wafer)
-            BRLAYER = chip.wafer.BRLAYER
-    if RRLAYER is None:
-        try:
-            RRLAYER = chip.wafer.RRLAYER
-        except AttributeError:
-            setupAirbridgeLayers(chip.wafer)
-            RRLAYER = chip.wafer.RRLAYER
+    if layer is None:
+        if BRLAYER is None:
+            try:
+                BRLAYER = chip.wafer.IBRLAYER
+            except AttributeError:
+                setupAirbridgeLayers(chip.wafer)
+                BRLAYER = chip.wafer.IBRLAYER
+        if RRLAYER is None:
+            try:
+                RRLAYER = chip.wafer.IRRLAYER
+            except AttributeError:
+                setupAirbridgeLayers(chip.wafer)
+                RRLAYER = chip.wafer.IRRLAYER
+    elif layer=='5_M1':
+        if BRLAYER is None:
+            try:
+                BRLAYER = chip.wafer.BRLAYER
+            except AttributeError:
+                setupAirbridgeLayers(chip.wafer)
+                BRLAYER = chip.wafer.BRLAYER
+        if RRLAYER is None:
+            try:
+                RRLAYER = chip.wafer.RRLAYER
+            except AttributeError:
+                setupAirbridgeLayers(chip.wafer)
+                RRLAYER = chip.wafer.RRLAYER
+    elif layer=='105_IM1':
+        if IBRLAYER is None:
+            try:
+                BRLAYER = chip.wafer.IBRLAYER
+            except AttributeError:
+                setupAirbridgeLayers(chip.wafer)
+                BRLAYER = chip.wafer.IBRLAYER
+        if IRRLAYER is None:
+            try:
+                RRLAYER = chip.wafer.IRRLAYER
+            except AttributeError:
+                setupAirbridgeLayers(chip.wafer)
+                RRLAYER = chip.wafer.IRRLAYER
 
     if lincolnLabs:
         rr_br_gap = 1.5 # RR.BR.E.1
@@ -1405,27 +1530,25 @@ def Airbridge(
         delta_right = 0
         delta_left = delta
 
-    chip.add(DogBone(struct().start,
-                     xvr_width,
-                     xvr_length,
-                     rr_width,
-                     rr_length,
-                     rr_br_gap,
-                     delta_left,
-                     delta_right,
-                     rotation=struct().direction, layer=BRLAYER, **kwargs),
-             structure=struct().clone())
-
-    s_left = struct().cloneAlong(vector=(0, xvr_length/2+delta_left+rr_br_gap))
+    s_left = struct().clone()
     s_left.direction += 90
+    s_left.shiftPos(-shape_overlap)
+    Strip_straight(chip, s_left, length=xvr_length/2+delta_left+2*shape_overlap, w=xvr_width, layer=BRLAYER, **kwargs)
+    s_left.shiftPos(-shape_overlap)
+    Strip_straight(chip, s_left, length=rr_length + 2*rr_br_gap, w=rr_width + 2*rr_br_gap, layer=BRLAYER, **kwargs)
+    s_l = s_left.clone()
+    s_left.shiftPos(-rr_length - rr_br_gap)
     Strip_straight(chip, s_left, length=rr_length, w=rr_width, layer=RRLAYER, **kwargs)
 
-    s_right = struct().cloneAlong(vector=(0, -(xvr_length/2+delta_left+rr_br_gap)))
+    s_right = struct().clone()
     s_right.direction -= 90
+    s_right.shiftPos(-shape_overlap)
+    Strip_straight(chip, s_right, length=xvr_length/2+delta_right+2*shape_overlap, w=xvr_width, layer=BRLAYER, **kwargs)
+    s_right.shiftPos(-shape_overlap)
+    Strip_straight(chip, s_right, length=rr_length + 2*rr_br_gap, w=rr_width + 2*rr_br_gap, layer=BRLAYER, **kwargs)
+    s_r = s_right.clone()
+    s_right.shiftPos(-rr_length - rr_br_gap)
     Strip_straight(chip, s_right, length=rr_length, w=rr_width, layer=RRLAYER, **kwargs)
-
-    s_l = s_left.cloneAlong(vector=(rr_br_gap,0))
-    s_r = s_right.cloneAlong(vector=(rr_br_gap,0))
 
     return s_l, s_r
 
@@ -1475,328 +1598,12 @@ def CPW_bridge(chip, structure, xvr_length=None, w=None, s=None, lincolnLabs=Fal
 
     s_left, s_right = Airbridge(chip, struct(), xvr_length=xvr_length, lincolnLabs=lincolnLabs, **kwargs)
 
-    w0 = rr_width+2*rr_br_gap
-    s0 = s/w * w0
-
     s_left.shiftPos(-rr_length - 2*rr_br_gap - rr_cpw_gap)
-    CPW_straight(chip, s_left, length=rr_length + 2*rr_br_gap + rr_cpw_gap, w=rr_width + 2*rr_br_gap, s=s0, **kwargs)
-    CPW_taper(chip, s_left, length=rr_length + 2*rr_br_gap, w0=w0, s0=s0, w1=w, s1=s, **kwargs)
+    CPW_straight(chip, s_left, length=rr_length + 2*rr_br_gap + rr_cpw_gap, w=rr_width + 2*rr_br_gap, s=s, **kwargs)
+    CPW_taper(chip, s_left, length=rr_length + 2*rr_br_gap, w0=rr_width+2*rr_br_gap, s0=s, w1=w, s1=s, **kwargs)
 
     s_right.shiftPos(-rr_length - 2*rr_br_gap - rr_cpw_gap)
-    CPW_straight(chip, s_right, length=rr_length + 2*rr_br_gap + rr_cpw_gap, w=rr_width + 2*rr_br_gap, s=s0, **kwargs)
-    CPW_taper(chip, s_right, length=rr_length + 2*rr_br_gap, w0=w0, s0=s0, w1=w, s1=s, **kwargs)
+    CPW_straight(chip, s_right, length=rr_length + 2*rr_br_gap + rr_cpw_gap, w=rr_width + 2*rr_br_gap, s=s, **kwargs)
+    CPW_taper(chip, s_right, length=rr_length + 2*rr_br_gap, w0=rr_width + 2*rr_br_gap, s0=s, w1=w, s1=s, **kwargs)
 
     return s_left, s_right
-
-
-
-def Capa_linker(chip, pos, length, width, dist_ground_height, 
-                dist_ground_width, dist_ground_strip, width_pad,
-                 height_pad, radius,rotation, w=None, s=None,
-                 bondwires=False,bond_pitch=70,incl_end_bond=True,
-                 bgcolor=None, XLAYER=None, MLAYER=None, **kwargs):
-
-    thisStructure = None
-    if isinstance(pos,tuple):
-        thisStructure = m.Structure(chip,start=pos,direction=rotation)
-        
-    def struct():
-        if isinstance(pos,m.Structure):
-            return pos
-        elif isinstance(pos,tuple):
-            return thisStructure
-        else:
-            return chip.structure(pos)
-    if w is None:
-        try:
-            w = struct().defaults['w']
-        except KeyError:
-            print('\x1b[33mw not defined in ',chip.chipID)
-    if s is None:
-        try:
-            s = struct().defaults['s']
-        except KeyError:
-            print('\x1b[33ms not defined in ',chip.chipID)
-
-
-
-    #get layers from wafer
-    if XLAYER is None:
-        try:
-            XLAYER = chip.wafer.XLAYER
-        except AttributeError:
-            chip.wafer.setupXORlayer()
-            XLAYER = chip.wafer.XLAYER
-
-
-
-    if len(width_pad)==1:
-        width_pad = [width_pad[0]]*2
-    if len(height_pad)==1:
-        height_pad = [height_pad[0]]*2
-    if len(dist_ground_width)==1:
-        dist_ground_width = [dist_ground_width[0]]*2
-    if len(dist_ground_height)==1:
-        dist_ground_height = [dist_ground_height[0]]*2
-
-    dl = 10e-3
-
-
-    def Linker(chip, pos, length, width, width_pad, height_pad, radius,rotation, **kwargs):
-
-        # adujst the length of the linker to account for the width of the pads
-
-        length = length - width_pad[0] - width_pad[1]
-        sin = np.sin(np.pi/180*rotation)
-        cos = np.cos(np.pi/180*rotation)
-
-        # draw the first pad as a rounded rectangle
-
-        start_point = (pos[0] + sin*height_pad[0]/2, pos[1]- cos*height_pad[0]/2)
-
-        
-        
-        
-        pad1 = RoundRect(start_point, height=height_pad[0], radius=radius,width=width_pad[0], roundCorners=[1,1,1,1],
-                                            rotation= rotation,**kwargs)
-        chip.add(pad1)
-
-
-        # draw the linker as a rectangle
-
-        start_point = (pos[0] + sin*width/2 + (width_pad[0]-dl)*cos, pos[1]- cos*width/2 + (width_pad[0] - dl)*sin)
-
-
-        linker = RoundRect(start_point, height=width, width=length, radius=0, rotation= rotation,
-                            roundCorners=[0,0,0,0], **kwargs)
-        
-        chip.add(linker)
-
-        # draw the second pad as a rounded rectangle
-
-        start_point = (start_point[0] + (length-2*dl)*cos + sin*(height_pad[1]/2 - width/2) , start_point[1] + (length-2*dl)*sin - cos*(height_pad[1]/2 - width/2))
-
-        pad2 = RoundRect(start_point, height=height_pad[1], radius=radius,width=width_pad[1], roundCorners=[1,1,1,1],
-                                            rotation= rotation, **kwargs)
-        
-        chip.add(pad2)
-
-    #add the linker to the structure
-
-    start = pos
-
-    Linker(chip, start, length, width, width_pad, height_pad, radius,rotation,layer=MLAYER,bgcolor=chip.bg(MLAYER))
-
-    #add the ground plane to the structure
-    # correct the pad size to account for ground plane distance 
-
-    width_pad = [width_pad[0] + 2*dist_ground_width[0], width_pad[1] + 2*dist_ground_width[1]]
-    height_pad = [height_pad[0] + 2*dist_ground_height[0], height_pad[1] + 2*dist_ground_height[1]]
-
-    length_ground = length + dist_ground_width[0] + dist_ground_width[1]
-    width_ground = width + 2*dist_ground_strip
-
-
-    sin = np.sin(np.pi/180*rotation)
-    cos = np.cos(np.pi/180*rotation)
-    
-
-    start_ground = (start[0] - cos*(dist_ground_width[0] -dl),start[1] - sin*(dist_ground_width[0] - dl))
-    Linker(chip, start_ground, length_ground, width_ground, width_pad, height_pad, radius,rotation)
-
-    if bondwires: # bond parameters patched through kwargs
-        num_bonds = int(length/bond_pitch)
-        this_struct = struct().clone()
-        this_struct.shiftPos(bond_pitch)
-        if not incl_end_bond: num_bonds -= 1
-        for i in range(num_bonds):
-            Airbridge(chip, this_struct, **kwargs)
-            this_struct.shiftPos(bond_pitch)
-
-
-def Capa_linker_tee(chip, pos, length, width, dist_ground_height, 
-                dist_ground_width, dist_ground_strip, width_pad,
-                 height_pad, radius,rotation,width_tee=[0], height_tee=[0], w=None, s=None,
-                 bondwires=False,bond_pitch=70,incl_end_bond=True,
-                 bgcolor=None, XLAYER=None, MLAYER=None, **kwargs):
-
-    thisStructure = None
-    if isinstance(pos,tuple):
-        thisStructure = m.Structure(chip,start=pos,direction=rotation)
-        
-    def struct():
-        if isinstance(pos,m.Structure):
-            return pos
-        elif isinstance(pos,tuple):
-            return thisStructure
-        else:
-            return chip.structure(pos)
-    if w is None:
-        try:
-            w = struct().defaults['w']
-        except KeyError:
-            print('\x1b[33mw not defined in ',chip.chipID)
-    if s is None:
-        try:
-            s = struct().defaults['s']
-        except KeyError:
-            print('\x1b[33ms not defined in ',chip.chipID)
-
-
-
-    #get layers from wafer
-    if XLAYER is None:
-        try:
-            XLAYER = chip.wafer.XLAYER
-        except AttributeError:
-            chip.wafer.setupXORlayer()
-            XLAYER = chip.wafer.XLAYER
-
-
-
-    if len(width_pad)==1:
-        width_pad = [width_pad[0]]*2
-    if len(height_pad)==1:
-        height_pad = [height_pad[0]]*2
-    if len(dist_ground_width)==1:
-        dist_ground_width = [dist_ground_width[0]]*2
-    if len(dist_ground_height)==1:
-        dist_ground_height = [dist_ground_height[0]]*2
-    if len(width_tee)==1:
-        width_tee = [width_tee[0]]*2
-    if len(height_tee)==1:
-        height_tee = [height_tee[0]]*2
-
-    dl = 10e-3
-
-
-    def Linker_tee(chip, pos, length, width, width_pad, height_pad, width_tee, height_tee, radius,rotation, **kwargs):
-
-        # adujst the length of the linker to account for the width of the pads
-
-        length = length - width_pad[0] - width_pad[1]
-        sin = np.sin(np.pi/180*rotation)
-        cos = np.cos(np.pi/180*rotation)
-
-        # draw the first pad as a rounded rectangle
-
-        start_point = (pos[0] + sin*height_pad[0]/2, pos[1]- cos*height_pad[0]/2)
-
-        
-        
-        if width_tee[0] != 0:
-
-            pad1 = RoundRect(start_point, height=height_pad[0], radius=radius,width=width_pad[0], roundCorners=[0,1,1,0],
-                                                rotation= rotation,**kwargs)
-            chip.add(pad1)
-
-        else:
-
-            pad1 = RoundRect(start_point, height=height_pad[0], radius=radius,width=width_pad[0], roundCorners=[1,1,1,1],
-                                                rotation= rotation,**kwargs)
-            chip.add(pad1)
-
-
-        if width_tee[0] != 0:
-
-            start_point = (pos[0] + sin*(height_pad[0]/2) - cos*(width_tee[0]), pos[1]- cos*(height_pad[0]/2) - sin*width_tee[0])
-
-            tee1_up = RoundRect(start_point, height=height_tee[0], radius=radius,width=width_tee[0], roundCorners=[1,0,0,1],
-                                                rotation= rotation,**kwargs)
-            
-            chip.add(tee1_up)
-
-            # start_point = (pos[0] - sin*(height_pad[0]/2) - cos*(width_tee[0]), pos[1]+ cos*(height_pad[0]/2) + sin*width_tee[0]) 
-            # start_point = (pos[0] - cos*(width_tee[0]), pos[1] + sin*width_tee[0]) 
-            # start_point = (pos[0] -sin*(height_pad[0]/2 - height_tee[0]/2), pos[1] - cos*(height_pad[0]/2 - height_tee[0]/2))
-            start_point = (pos[0] -sin*(height_pad[0]/2-height_tee[0]) -cos*width_tee[0], pos[1] + cos*(height_pad[0]/2-height_tee[0])-sin*width_tee[0])
-
-            tee1_down = RoundRect(start_point, height=height_tee[0], radius=radius,width=width_tee[0], roundCorners=[1,0,0,1],
-                                                rotation= rotation,**kwargs)
-            
-            chip.add(tee1_down)
-
-
-        # draw the linker as a rectangle
-
-        start_point = (pos[0] + sin*width/2 + (width_pad[0]-dl)*cos, pos[1]- cos*width/2 + (width_pad[0] - dl)*sin)
-
-
-        linker = RoundRect(start_point, height=width, width=length, radius=0, rotation= rotation,
-                            roundCorners=[0,0,0,0], **kwargs)
-        
-        chip.add(linker)
-
-        # draw the second pad as a rounded rectangle
-
-        start_point = (start_point[0] + (length-2*dl)*cos + sin*(height_pad[1]/2 - width/2) , start_point[1] + (length-2*dl)*sin - cos*(height_pad[1]/2 - width/2))
-
-        if width_tee[1] != 0:
-
-            pad2 = RoundRect(start_point, height=height_pad[1], radius=radius,width=width_pad[1], roundCorners=[1,0,0,1],
-                                                rotation= rotation, **kwargs)
-            
-            chip.add(pad2)
-
-        else:
-
-            pad2 = RoundRect(start_point, height=height_pad[1], radius=radius,width=width_pad[1], roundCorners=[1,1,1,1],
-                                                rotation= rotation, **kwargs)
-            
-            chip.add(pad2)
-
-        # add the tee to the second pad
-
-        if width_tee[1] != 0:
-
-            start_point = (start_point[0] + cos*width_pad[1], start_point[1]+ sin*width_pad[1])
-
-            tee2_up = RoundRect(start_point, height=height_tee[1], radius=radius,width=width_tee[1], roundCorners=[0,1,1,0],
-                                                rotation= rotation,**kwargs)
-            
-            chip.add(tee2_up)
-
-            start_point = (start_point[0] - sin*(height_pad[1] - height_tee[1]), start_point[1] + cos*(height_pad[1] - height_tee[1]))
-
-            tee2_down = RoundRect(start_point, height=height_tee[1], radius=radius,width=width_tee[1], roundCorners=[0,1,1,0],
-                                                rotation= rotation,**kwargs)
-            
-            chip.add(tee2_down)
-
-            
-
-    #add the linker to the structure
-
-    start = pos
-
-    Linker_tee(chip, start, length, width, width_pad, height_pad, width_tee, height_tee,radius,rotation,layer=MLAYER,bgcolor=chip.bg(MLAYER))
-
-    #add the ground plane to the structure
-    # correct the pad size to account for ground plane distance 
-
-    width_pad = [width_pad[0] + 2*dist_ground_width[0], width_pad[1] + 2*dist_ground_width[1]]
-    height_pad = [height_pad[0] + 2*dist_ground_height[0], height_pad[1] + 2*dist_ground_height[1]]
-
-    length_ground = length + dist_ground_width[0] + dist_ground_width[1]
-    width_ground = width + 2*dist_ground_strip
-
-    # width_tee = [width_tee[0] + 2*dist_ground_width[0], width_tee[1] + 2*dist_ground_width[1]]
-    height_tee = [height_tee[0] + 2*dist_ground_height[0], height_tee[1] + 2*dist_ground_height[1]]
-
-
-    sin = np.sin(np.pi/180*rotation)
-    cos = np.cos(np.pi/180*rotation)
-    
-
-    start_ground = (start[0] - cos*(dist_ground_width[0] -dl),start[1] - sin*(dist_ground_width[0] - dl))
-    Linker_tee(chip, start_ground, length_ground, width_ground, width_pad, height_pad, width_tee, height_tee,radius,rotation)
-
-    if bondwires: # bond parameters patched through kwargs
-        num_bonds = int(length/bond_pitch)
-        this_struct = struct().clone()
-        this_struct.shiftPos(bond_pitch)
-        if not incl_end_bond: num_bonds -= 1
-        for i in range(num_bonds):
-            Airbridge(chip, this_struct, **kwargs)
-            this_struct.shiftPos(bond_pitch)
-

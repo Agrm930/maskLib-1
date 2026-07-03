@@ -4,6 +4,7 @@
 Created on Fri Apr 24 14:48:45 2020
 
 @author: sasha
+Edited by Agrim, 2026 (fixed dose-array indexing/broadcast bugs in add_dose_array)
 """
 import numpy as np
 import maskLib.MaskLib as m
@@ -12,26 +13,17 @@ from dxfwrite import const
 from dxfwrite.vector2d import midpoint, vadd, vsub, distance
 
 #import maskLib.junctionLib as j
-from maskLib.Entities import RoundRect, InsideCurve, CurveRect, Star
-from maskLib.microwaveLib import CPW_stub_open, CPW_straight, Strip_straight, Strip_bend, Strip_taper, CPW_launcher, CPW_taper, Strip_stub_open
-from maskLib.junctionLib import DolanJunction, JContact_tab, ManhattanJunction, JcalcTabDims, JContact_slot, JContact_tab, JSingleProbePad, JProbePads
+from maskLib.Entities import RoundRect, InsideCurve, CurveRect, SolidPline  
+from maskLib.microwaveLib import CPW_stub_open, CPW_straight, Strip_straight, Strip_contact, Strip_bend, Strip_taper, CPW_launcher, CPW_taper, Strip_stub_open
+from maskLib.junctionLib import DolanJunction, JContact_tab, ManhattanJunction, JcalcTabDims, JContact_slot, JContact_tab, JSingleProbePad, JProbePads, JSingleProbePadLeads, Transmon3DWithShunt, FlagPads
+from maskLib.fluxoniumLib import smallJJ, JJ_chain, half_loop_leads, flux_transformer, half_loop_leads2, leads_for_tmon_dosearray_custom #no_loop_leads, 
+from maskLib.utilities import kwargStrip, cornerRound
 
-from maskLib.utilities import kwargStrip
 
 
-
-# ===============================================================================
-# global functions to setup global variables in an arbitrary wafer object
-# ===============================================================================
-
-def setupXORlayer(wafer,XLAYER='XOR',xcolor=6):
-    '''
-    >>>>>>>>>>>>>>> Deprecated! Use wafer.setupXORlayer instead <<<<<<<<<<<<<<<<<<
-    Sets a layer for XOR operations on all other layers. 
-    OUT = ( LAYER1 or LAYER2 ... or LAYERN ) xor XLAYER 
-    '''
-    wafer.XLAYER=XLAYER
-    wafer.addLayer(XLAYER, xcolor)
+# NOTE: the deprecated module-level setupXORlayer() was removed in 2026 --
+# use wafer.setupXORlayer() instead (the old version is preserved in
+# qubitLib_old.py).
 
 # ===============================================================================
 # 3D transmon qubit functions (composite entities)
@@ -116,9 +108,57 @@ def Transmon3D(chip,pos,rotation=0,bgcolor=None,padh=200,padh2=200,padw=3000,pad
                taperw=0,taperw2=0,leadw=85,leadw2=85,leadh=20,leadh2=20,separation=20,
                r_out=0.75,r_ins=0.75,taboffs=-0.05,steml=1.5,gapl=1.5,tabl=2,stemw=3,gapw=3,tabw=0.5,
                jpadTaper=10,jpadw=25,jpadh=16,jpadSeparation=28,jfingerl=4.5,jfingerex=1.5,jleadw=1,
-               junctionClass=ManhattanJunction,**kwargs):
+               junctionClass=ManhattanJunction,**kwargs): 
     '''
     Generates transmon paddles with a manhattan junction at the center. 
+    Junction and contact tab parameters are monkey patched to Junction function through kwargs.
+    
+    padh, padh2: left,right transmon pad height
+    padw, padw2: left,right  transmon pad width (or length)
+    taperw, taperw2: left,right taper length from pad to lead
+    leadw, leadw2: left,right lead width
+    leadh, leadh2: left,right lead height
+    separation: separation between leads (where junction goes)
+    junctionClass: if None, no junction is drawn. Otherwise, a junction of the specified class is drawn, e.g. ManhattanJunction, DolanJunction, etc.
+
+    '''
+    thisStructure = None
+    if isinstance(pos,tuple):
+        thisStructure = m.Structure(chip,start=pos,direction=rotation)
+        
+    def struct():
+        if isinstance(pos,m.Structure):
+            return pos
+        elif isinstance(pos,tuple):
+            return thisStructure
+        else:
+            return chip.structure(pos)
+     
+    if bgcolor is None: #color for junction, not undercut
+        bgcolor = chip.wafer.bg()
+    
+    j_struct = struct().start
+        
+    #start where the junction is, move left to where left pad starts
+    struct().shiftPos(-separation/2-leadw-padw)
+    JSingleProbePad(chip,struct(),padwidth=padw,padheight=padh,tabShoulder=True,tabShoulderWidth=leadh,tabShoulderLength=leadw,flipped=False,padradius=None,
+                      r_out=r_out,r_ins=r_ins,taboffs=taboffs,gapl=gapl,tabl=tabl,gapw=gapw,tabw=tabw,absoluteDimensions=True,**kwargs)
+    struct().shiftPos(separation)
+    JSingleProbePad(chip,struct(),padwidth=padw2,padheight=padh2,tabShoulder=True,tabShoulderWidth=leadh2,tabShoulderLength=leadw2,flipped=True,padradius=None,
+                      r_out=r_out,r_ins=r_ins,taboffs=taboffs,gapl=gapl,tabl=tabl,gapw=gapw,tabw=tabw,absoluteDimensions=True,**kwargs)
+                    #r_out=0,r_ins=0,taboffs=3,gapl=0,tabl=0,gapw=gapw,tabw=2,absoluteDimensions=True,**kwargs)
+    
+    #write the junction. The "None" option allows for creation of pads only, in case one wants to draw a SNAILmon, fluxonium-mon, etc.
+    if junctionClass != None:
+        junctionClass(chip, j_struct,rotation=struct().direction,jpadTaper=jpadTaper,jpadw=jpadw,jpadh=jpadh,separation=jpadSeparation+jpadTaper,jfingerl=jfingerl,jfingerex=jfingerex,leadw=jleadw,**kwargs)
+    
+def Transmon3D_leads(chip,pos,rotation=0,bgcolor=None,padh=200,padh2=200,padw=3000,padw2=3000,
+               taperw=0,taperw2=0,leadw=85,leadw2=85,leadh=20,leadh2=20,separation=20,
+               r_out=0.75,r_ins=0.75,taboffs=-0.05,steml=1.5,gapl=1.5,tabl=2,stemw=3,gapw=3,tabw=0.5,
+               jpadTaper=10,jpadw=25,jpadh=16,jpadSeparation=28,jfingerl=4.5,jfingerex=1.5,jleadw=1,
+               junctionClass=None,**kwargs):
+    '''
+    Generates just the leads of a 3D transmon, with the option of including a junction (which is off by default). 
     Junction and contact tab parameters are monkey patched to Junction function through kwargs.
     
     padh, padh2: left,right transmon pad height
@@ -148,17 +188,19 @@ def Transmon3D(chip,pos,rotation=0,bgcolor=None,padh=200,padh2=200,padw=3000,pad
         
     #start where the junction is, move left to where left pad starts
     struct().shiftPos(-separation/2-leadw-padw)
-    JSingleProbePad(chip,struct(),padwidth=padw,padheight=padh,tabShoulder=True,tabShoulderWidth=leadh,tabShoulderLength=leadw,flipped=False,padradius=None,
+    JSingleProbePadLeads(chip,struct(),padwidth=padw,padheight=padh,tabShoulder=True,tabShoulderWidth=leadh,tabShoulderLength=leadw,flipped=False,padradius=None,
                       r_out=r_out,r_ins=r_ins,taboffs=taboffs,gapl=gapl,tabl=tabl,gapw=gapw,tabw=tabw,absoluteDimensions=True,**kwargs)
     struct().shiftPos(separation)
-    JSingleProbePad(chip,struct(),padwidth=padw2,padheight=padh2,tabShoulder=True,tabShoulderWidth=leadh2,tabShoulderLength=leadw2,flipped=True,padradius=None,
+    JSingleProbePadLeads(chip,struct(),padwidth=padw2,padheight=padh2,tabShoulder=True,tabShoulderWidth=leadh2,tabShoulderLength=leadw2,flipped=True,padradius=None,
                       r_out=r_out,r_ins=r_ins,taboffs=taboffs,gapl=gapl,tabl=tabl,gapw=gapw,tabw=tabw,absoluteDimensions=True,**kwargs)
                     #r_out=0,r_ins=0,taboffs=3,gapl=0,tabl=0,gapw=gapw,tabw=2,absoluteDimensions=True,**kwargs)
     
-    #write the junction
-    junctionClass(chip, j_struct,rotation=struct().direction,jpadTaper=jpadTaper,jpadw=jpadw,jpadh=jpadh,separation=jpadSeparation+jpadTaper,jfingerl=jfingerl,jfingerex=jfingerex,leadw=jleadw,**kwargs)
-    
-    
+    #write the junction.
+    if junctionClass != None:
+        junctionClass(chip, j_struct,rotation=struct().direction,jpadTaper=jpadTaper,jpadw=jpadw,jpadh=jpadh,separation=jpadSeparation+jpadTaper,jfingerl=jfingerl,jfingerex=jfingerex,leadw=jleadw,**kwargs)
+
+
+
 
 # ===============================================================================
 # Planar (2D) qubit functions (composite entities)
@@ -310,7 +352,7 @@ def Xmon(
     chip, structure, rotation=0,
     xmonw=25, xmonl=150, xmon_gapw=20, xmon_gapl=30,
     r_out=None, r_ins=None, r_arm5=None,
-    jj_loc=6, jj_reverse=False, junctionClass=DolanJunction,**kwargs):
+    jj_loc=6, jj_reverse=False, junctionClass=ManhattanJunction,**kwargs):
 
     """
     Generates an Xmon (does NOT use an XOR layer) with a junction method specified by junctionClass.
@@ -535,437 +577,942 @@ def Xmon(
     return s # center of xmon
 
 
-def Starmon(chip, pos, widths=[10], heights=[100], dist_to_ground_heights = [10], dist_to_ground_widths = [10], 
-            dist_to_ground_widths_tip = [10],dist_to_ground_heights_tip=[10],
-            radius_in = [0],radius_out = [0], tip_heights = [0], tip_widths = [0],
-             offset=0, rotation=0, r_out=None, r_ins=None,bgcolor=None, XLAYER=None, MLAYER=None,
-                jj_branch='up', jj_loc='center' , jj_reverse=False, junctionClass=DolanJunction,**kwargs):
+def Snailmon3D(chip, 
+                startpoint = (1500, 2350), 
+                pads=True, 
+                snail=True, 
+                FT=False, 
+                dosearray=True, 
+                alignstrip=True,
+                # small_JJ=False,
+                # big_JJ_chain=True,
+                **kwargs):
+    # Set default values for layers if not provided in kwargs
+    layer = kwargs.get('layer', 'SNAILMON')
+    LJlayer = kwargs.get('LJlayer', 'LJJLAYER')
+    LUlayer = kwargs.get('LUlayer', 'LULAYER')
+    SJJlayer = kwargs.get('SJJlayer', 'SJJLAYER')
+    SUlayer = kwargs.get('SUlayer', 'SULAYER')
+    gap = kwargs.get('gap', 0.48)
+    bridgewidth = kwargs.get('bridgewidth', 1.78)
+    bigfingerW = kwargs.get('bigfinger_width', 0.41)
+    smallfingerW = kwargs.get('smallfingerwidth', 0.21)
+    bridgeW = kwargs.get('bridge_width', 0.91)
+    bridgeL = kwargs.get('bridgeL', 0.48)
+    largebridgeL = kwargs.get('largebridgeL', 0.4)
+    undercut = kwargs.get('undercut', 0.2)
+    leads_contactpads_dose = kwargs.get('leads_contactpads_dose', 1)
+    smallfinger_dose = kwargs.get('smallfinger_dose', 1)
+    bigfinger_dose = kwargs.get('bigfinger_dose', 1)
+    big_JJ_finger_dose = kwargs.get('big_JJ_finger_dose', 1)
 
-    """
-    Generates a Starmon (does NOT use an XOR layer) with a junction method specified by junctionClass.
-    Additional params can be passed to junctions used kwargs.
-    jj_loc in [0, 11] decides the location on the cross to place the junction:
-        end of every arm and midway along every arm, counting clockwise
-        from the start.
-    By default, draws the junction pointing toward ground. If jj_reverse, draws pointing toward
-        pad at the specified location.
-    """
-    thisStructure = None
-    if isinstance(pos,tuple):
-        thisStructure = m.Structure(chip,start=pos,direction=rotation)
-        
-    def struct():
-        if isinstance(pos,m.Structure):
-            return pos
-        elif isinstance(pos,tuple):
-            return thisStructure
-        else:
-            return chip.structure(pos)
-        
-    if bgcolor is None: #color for junction, not undercut
-        bgcolor = chip.wafer.bg()
+
+    bridgedose = kwargs.get('bridgedose', 1)
+    bridge_dose = kwargs.get('bridge_dose', 1)
+    shift_dose = kwargs.get('shift_dose', 1)
+    undercut_dose = kwargs.get('undercut_dose', 1)
+    label_dose = kwargs.get('label_dose', 1)
+    homeplates = kwargs.get('homeplates', True)
+    n_junc = kwargs.get('n_junc', 3)
+    # JJlength = kwargs.get('JJlength', 1.5)
+    # JJwidth = kwargs.get('JJwidth', 1.08)
+    padseparation = kwargs.get('padseparation', 200)
+
+    big_JJ_chain = kwargs.get('big_JJ_chain', True)
+    small_JJ = kwargs.get('small_JJ', True)
+
+    big_JJ_finger_width = kwargs.get('big_JJ_finger_width', 0.41)
+    big_JJ_finger_length = kwargs.get('big_JJ_finger_length', 2.2)
+
+    # print("")
     
-    #get layers from wafer
-    if XLAYER is None:
-        try:
-            XLAYER = chip.wafer.XLAYER
-        except AttributeError:
-            chip.wafer.setupXORlayer()
-            XLAYER = chip.wafer.XLAYER
+    #locals().update(kwargs)
 
-    # add the XOR layer
 
-    
+    # Define the chip-mounting alignment strip
+    if alignstrip:
+        Strip_straight(chip, 
+                    (34750, 3350), 
+                    100, 
+                    w=6700
+                    )
 
-    def RoundStar(pos, widths, heights, offset, radius_in, radius_out, tip_heights, tip_widths,  **kwargs):
+
+    if pads:
+        FlagPads(chip, 
+                startpoint, 
+                leadh=3250, 
+                leadh2=1250,
+                # flagw=750, 
+                # flagh=750, 
+                flipped=True, 
+                separation=padseparation,
+                shunt=True, 
+                shunt_width=10, 
+                shunt_dist=150, 
+                shunt_length=400, 
+                shunt_side='left',
+                tab=True,
+                tabShoulder=False,
+                layer=layer
+                )
+
+    # Draw the SNAIL JJ's using updated fluxoniumLib
+    if snail:
+        if big_JJ_chain:
+            print('drawing chain of big JJs')
+            # print('bigfinger_width', big_JJ_finger_width)
+            JJlength = float(big_JJ_finger_length)
+            JJwidth = float(big_JJ_finger_width)
+            yoffset=padseparation/2+n_junc/2*JJlength+largebridgeL
+            JJ_chain(chip, m.Structure(chip, 
+                #start=(startpoint[0]+50-17/2+1/2, startpoint[1]-100-5.3/2),direction=90), 
+                start=(startpoint[0]+42, startpoint[1]-yoffset),direction=90), 
+                n_junc_array=[n_junc],
+                JJlength=JJlength,
+                JJwidth=JJwidth, 
+                w=1.5, 
+                s=1.78, 
+                bridgewidth=bridgewidth, 
+                gap=0.4, 
+                bgcolor=None, 
+                CW=True, 
+                finalpiece=False, 
+                Jlayer='BIGJJFINGER_'+str(float(big_JJ_finger_dose)), 
+                Ulayer='BIGJJUNDERCUT_'+str(float(undercut_dose)),
+                bridgelayer='BIGJJBRIDGE_'+str(float(bridge_dose)),
+                padseparation=padseparation
+                )
+        if small_JJ:
+            print('drawing small JJ')
+            # print('smallfinger_width', float(smallfingerW))
+            smallJJ(chip, 
+                m.Structure(chip, start=(startpoint[0]+58.5, startpoint[1]-100),direction=90), 
+                Jlayer=SJJlayer,
+                # Ulayer=SUlayer,
+                Ulayer='SMALLJJUNDERCUT_'+str(float(undercut_dose)),
+                gap=gap, 
+                leadW = 1, 
+                fingerL=1.5, 
+                bigfingerW=float(bigfingerW), 
+                smallfingerW=(float(smallfingerW)), 
+                bridgeW=bridgeW, 
+                bridgeL=bridgeL, 
+                undercut=undercut,
+                smallfingerlayer='SMALLJJSMALLFINGER_'+str(float(smallfinger_dose)), 
+                bigfingerlayer='SMALLJJBIGFINGER_'+str(float(bigfinger_dose)), 
+                Undercutlayer='SMALLJJUNDERCUT_'+str(float(undercut_dose)), 
+                shiftlayer = 'SMALLJJSHIFT_'+str(float(shift_dose)), 
+                bridgelayer='SMALLJJBRIDGE_'+str(float(bridge_dose)),
+                )
+        if small_JJ and big_JJ_chain:
+            print('drawing full snail')
+
+        # Draw the half loop leads
+        # half_loop_leads(chip, 
+        #             m.Structure(chip, start=startpoint,direction=0),
+        #             start=(50,-100),
+        #             leadL=103, 
+        #             leadW=1, 
+        #             loopW=15, 
+        #             looplength_R=(17-3.48)/2, 
+        #             looplength_L=17/2-5.3/2, 
+        #             contactpads=homeplates, 
+        #             contactL=11.5, 
+        #             contactW=23, 
+        #             shift=True, 
+        #             layer='LOOP'
+        #             )       
+        # half_loop_leads(chip, 
+        #             m.Structure(chip, start=startpoint, direction=0), 
+        #             start=(50,-100), 
+        #             yflip=True,
+        #             leadL=103, 
+        #             leadW=1, 
+        #             loopW=15, 
+        #             looplength_R=(17-3.48)/2, 
+        #             looplength_L=17/2-5.3/2, 
+        #             contactpads=homeplates, 
+        #             contactL=11.5, 
+        #             contactW=23, 
+        #             layer='LOOP'
+        #             )
+         
+        # draw half-loop leads adjusted for large JJs, per Prathu's code
+        loopW = 15
+        loopLength=17
+        bridge_length=largebridgeL
+        bigJJfinger_length=2.2
+        smallJJ_finger_length=1.5
+        smallJJ_bridge_length=bridgeL
+        looplength_R = (loopLength - 2*smallJJ_finger_length - smallJJ_bridge_length)/2
+        looplength_L = (loopLength - 3*bigJJfinger_length - 2*bridge_length)/2
+        leadW = 1
+        if small_JJ:
+            loopleads_dose = smallfinger_dose
+        elif big_JJ_chain:
+            loopleads_dose = big_JJ_finger_dose
+        elif (small_JJ and big_JJ_chain):
+            loopleads_dose = smallfinger_dose
+        half_loop_leads2(
+                    chip, 
+                    m.Structure(chip, start=(startpoint[0], startpoint[1]), direction=0), 
+                    start=(50,-100), 
+                    yflip=False,
+                    # leadL=103, 
+                    # leadW=1, 
+                    # loopW=15, 
+                    # looplength_R=(17-3.48)/2, 
+                    # looplength_L=17/2-5.3/2, 
+                    # contactpads=None, 
+                    # contactL=11.5, 
+                    # contactW=23, 
+                    # layer='LOOP'
+                    leadL=100, leadW=leadW, loopW=loopW, looplength_R=looplength_R, looplength_L=looplength_L,
+                        contactpads=homeplates, contactW=20, contactL=10, wedgeL=10, shift=True, shiftW=0.5, 
+                        layer='LOOP_'+str(loopleads_dose),
+                        contact_to_probe_leads=True, contact_to_probe_leads_Length=130,homeplates=homeplates
+                    )
+        half_loop_leads2(
+                    chip, 
+                    m.Structure(chip, start=startpoint, direction=0), 
+                    start=(50,-100), 
+                    yflip=True,
+                    # leadL=103, 
+                    # leadW=1, 
+                    # loopW=15, 
+                    # looplength_R=(17-3.48)/2, 
+                    # looplength_L=17/2-5.3/2, 
+                    # contactpads=None, 
+                    # contactL=11.5, 
+                    # contactW=23, 
+                    # layer='LOOP'
+                    leadL=100, leadW=leadW, loopW=loopW, looplength_R=looplength_R, looplength_L=looplength_L,
+                        contactpads=homeplates, contactW=20, contactL=10, wedgeL=10, shift=True, shiftW=0.5, 
+                        layer='LOOP_'+str(loopleads_dose),
+                        contact_to_probe_leads=True, contact_to_probe_leads_Length=130
+                    )
+        # # top one.
+        # half_loop_leads2(chip, 
+        #                 m.Structure(chip, start=startpoint, direction=0),
+        #                 direction=0),
+        #                 start=(0,0),
+        #                 yflip=False,
+        #                 leadL=100, leadW=leadW, loopW=loopW, looplength_R=looplength_R, looplength_L=5,
+        #                 contactpads=True, contactW=20, contactL=10, wedgeL=10, shift=True, shiftW=0.5, layer='LOOP',
+        #                 contact_to_probe_leads=True, contact_to_probe_leads_Length=130)
+        # # bottom one.
+        # half_loop_leads2(self,
+        #                 m.Structure(self, start=(params['startpoint'][0]+i*arrayspacing_x+padw/2, params['startpoint'][1]+j*arrayspacing_y+100-separation/2),
+        #                 direction=0),
+        #                 start=(0,0),
+        #                 yflip=True,
+        #                 leadL=100, leadW=leadW, loopW=loopW, looplength_R=looplength_R, looplength_L=5,
+        #                 contactpads=True, contactW=20, contactL=10, wedgeL=10, shift=True, shiftW=0.5, layer='LOOP',
+        #                 contact_to_probe_leads=True, contact_to_probe_leads_Length=130)
+        
+
+
+    if FT:
+    # draw the flux transformer
+        flux_transformer(chip,
+            startpoint=(1565,2200),
+            large_rect_length=5000,
+            large_rect_width=2250,
+            small_rect_length=2500,
+            small_rect_width=100,
+            conductor_width=10,
+            Y_offset=0,
+            X_offset=0,
+            outer_radius=20,
+            inner_radius=10,
+            layer='FT'
+            )
+    if dosearray:
+    # draw the dose array--need to add the slot at least
+        add_dose_array(chip,
+                    startpoint=(35950,1450),
+                    arraydims=(6,2), 
+                    arrayspacing=1000, 
+                    doses=None, 
+                    basedose=1000,
+                    printdose=False,
+                    qubit='Transmon',
+                    dummyFT=False,
+                    #layer='DOSEARRAY'
+                    )
+        add_dose_array(chip,
+                    startpoint=(35950,4000),
+                    arraydims=(6,2), 
+                    arrayspacing=1000, 
+                    doses=None, 
+                    basedose=1000,
+                    printdose=False,
+                    qubit='SNAIL',
+                    #layer='DOSEARRAY'
+                    )
+
+def Fluxonium3D(chip, 
+                startpoint = (1500, 2350), 
+                addFlagPads=True, 
+                addLoop=True, 
+                FT=False, 
+                dosearray=False, 
+                alignstrip=True,
+                small_JJ=True,
+                straight_JJ_chain=True,
+                **kwargs):
+    # Set default values for layers if not provided in kwargs
+    layer = kwargs.get('layer', 'SNAILMON')
+    LJlayer = kwargs.get('LJlayer', 'LJJLAYER')
+    LUlayer = kwargs.get('LUlayer', 'LULAYER')
+    SJJlayer = kwargs.get('SJJlayer', 'SJJLAYER')
+    SUlayer = kwargs.get('SUlayer', 'SULAYER')
+    gap = kwargs.get('gap', 0.48)
+    bridgewidth = kwargs.get('bridgewidth', 1.78)
+    bigfingerW = kwargs.get('bigfinger_width', 0.41)
+    smallfingerW = kwargs.get('smallfingerwidth', 0.21)
+    bridgeW = kwargs.get('bridge_width', 0.91)
+    bridgeL = kwargs.get('bridgeL', 0.48)
+    largebridgeL = kwargs.get('largebridgeL', 0.4)
+    undercut = kwargs.get('undercut', 0.2)
+    leads_contactpads_dose = kwargs.get('leads_contactpads_dose', 1)
+    smallfinger_dose = kwargs.get('smallfinger_dose', 1)
+    bigfinger_dose = kwargs.get('bigfinger_dose', 1)
+    bridgedose = kwargs.get('bridgedose', 1)
+    bridge_dose = kwargs.get('bridge_dose', 1)
+    shift_dose = kwargs.get('shift_dose', 1)
+    undercut_dose = kwargs.get('undercut_dose', 1)
+    label_dose = kwargs.get('label_dose', 1)
+    homeplates = kwargs.get('homeplates', True)
+    n_junc = kwargs.get('n_junc', 3)
+    JJlength = kwargs.get('JJlength', 1.5)
+    JJwidth = kwargs.get('JJwidth', 1.08)
+    padseparation = kwargs.get('padseparation', 200)
+    loopW = kwargs.get('loopW',15)
+    loopLength = kwargs.get('loopLength', 17)
+    bridge_length = kwargs.get('bridge_length', largebridgeL)
+    finger_length = kwargs.get('finger_length', JJlength)
+    smallJJ_finger_length = kwargs.get('smallJJ_finger_length', 1.5)
+    smallJJ_bridge_length = kwargs.get('smallJJ_bridge_length', bridgeL)
+
+    # Define the chip-mounting alignment strip
+    if alignstrip:
+        Strip_straight(chip, 
+                    (34750, 3350), 
+                    100, 
+                    w=6700
+                    )
+
+
+    if addFlagPads:
+        FlagPads(chip, 
+                startpoint, 
+                leadh=3250, 
+                leadh2=1250,
+                # flagw=750, 
+                # flagh=750, 
+                flipped=True, 
+                separation=padseparation,
+                shunt=True, 
+                shunt_width=10, 
+                shunt_dist=150, 
+                shunt_length=400, 
+                shunt_side='left',
+                tab=True,
+                tabShoulder=False,
+                layer=layer
+                )
+
+    # Draw the SNAIL JJ's using updated fluxoniumLib
+    if addLoop:
+        if straight_JJ_chain:
+        # print(JJlength,"snailmon3d")
+            #loopLength = 17 - (n_junc*finger_length + (n_junc-1)*bridge_length)/2#34 - n_junc*finger_length - (n_junc-1)*bridge_length)/2
+            yoffset=padseparation/2+n_junc/2*JJlength+(n_junc-1)*largebridgeL/2
+            JJ_chain(chip, m.Structure(chip, 
+                #start=(startpoint[0]+50-17/2+1/2, startpoint[1]-100-5.3/2),direction=90), 
+                start=(startpoint[0]+42, startpoint[1]-yoffset),direction=90), 
+                n_junc=n_junc,
+                JJlength=JJlength,
+                JJwidth=JJwidth, 
+                w=1.5, 
+                s=1.78, 
+                bridgewidth=bridgewidth, 
+                gap=0.4, 
+                bgcolor=None, 
+                CW=True, 
+                finalpiece=False, 
+                Jlayer='LARGEJJFINGER_'+str(bigfinger_dose), 
+                Ulayer='UNDERCUT_'+str(undercut_dose),
+                bridgelayer='BRIDGE_'+str(bridge_dose),
+                padseparation=padseparation
+                )
+            print(n_junc, "JJ_chain")
+        
+        if small_JJ:
+            smallJJ(chip, 
+                m.Structure(chip, start=(startpoint[0]+58.5, startpoint[1]-100),direction=90), 
+                Jlayer=SJJlayer,
+                Ulayer=SUlayer,
+                gap=gap, 
+                leadW = 1, 
+                fingerL=1.5, 
+                bigfingerW=bigfingerW, 
+                smallfingerW=smallfingerW, 
+                bridgeW=bridgeW, 
+                bridgeL=bridgeL, 
+                undercut=undercut,
+                smallfingerlayer='SMALLFINGER_'+str(smallfinger_dose), 
+                bigfingerlayer='BIGFINGER_'+str(bigfinger_dose), 
+                Undercutlayer='UNDERCUT_'+str(undercut_dose), 
+                shiftlayer = 'SHIFT_'+str(shift_dose), 
+                bridgelayer='BRIDGE_'+str(bridge_dose),
+                )
+
+        # Draw the half loop leads
+        # half_loop_leads(chip, 
+        #             m.Structure(chip, start=startpoint,direction=0),
+        #             start=(50,-100),
+        #             leadL=103, 
+        #             leadW=1, 
+        #             loopW=15, 
+        #             looplength_R=(17-3.48)/2, 
+        #             looplength_L=17/2-5.3/2, 
+        #             contactpads=homeplates, 
+        #             contactL=11.5, 
+        #             contactW=23, 
+        #             shift=True, 
+        #             layer='LOOP'
+        #             )       
+        # half_loop_leads(chip, 
+        #             m.Structure(chip, start=startpoint, direction=0), 
+        #             start=(50,-100), 
+        #             yflip=True,
+        #             leadL=103, 
+        #             leadW=1, 
+        #             loopW=15, 
+        #             looplength_R=(17-3.48)/2, 
+        #             looplength_L=17/2-5.3/2, 
+        #             contactpads=homeplates, 
+        #             contactL=11.5, 
+        #             contactW=23, 
+        #             layer='LOOP'
+        #             )
+         
+        # draw half-loop leads adjusted for large JJs, per Prathu's code
+
+        looplength_R = (loopLength - 2*smallJJ_finger_length - smallJJ_bridge_length)/2
+        looplength_L = (loopLength - n_junc*finger_length - (n_junc-1)*bridge_length)/2
+        leadW = 1
+        half_loop_leads2( #top half of the loop/leads
+                    chip, 
+                    m.Structure(chip, start=startpoint, direction=0), 
+                    start=(50,-108.5+loopLength/2), 
+                    yflip=False,
+                    leadL=100, 
+                    leadW=leadW, 
+                    loopW=loopW, 
+                    loopLength = loopLength,
+                    looplength_R=looplength_R, 
+                    looplength_L=looplength_L,
+                    contactpads=homeplates, 
+                    contactW=20, 
+                    contactL=10, 
+                    wedgeL=10, 
+                    shift=True, 
+                    shiftW=0.5, 
+                    layer='LOOP',
+                    contact_to_probe_leads=True, 
+                    contact_to_probe_leads_Length=130,
+                    homeplates=homeplates
+                    )
+        half_loop_leads2( #bottom half of the loop/leads
+                    chip, 
+                    m.Structure(chip, start=startpoint, direction=0), 
+                    start=(50,-91.5-loopLength/2), 
+                    yflip=True,
+                    leadL=100, 
+                    leadW=leadW, 
+                    loopW=loopW, 
+                    loopLength = loopLength,
+                    looplength_R=looplength_R, 
+                    looplength_L=looplength_L,
+                    contactpads=homeplates, 
+                    contactW=20, 
+                    contactL=10, 
+                    wedgeL=10, 
+                    shift=True, 
+                    shiftW=0.5, 
+                    layer='LOOP',
+                    contact_to_probe_leads=True, 
+                    contact_to_probe_leads_Length=130,
+                    homeplates=homeplates
+                    )
+        # top one.
+        # half_loop_leads2(chip, 
+        #                 m.Structure(chip, start=startpoint, direction=0),
+        #                 direction=0),
+        #                 start=(0,0),
+        #                 yflip=False,
+        #                 leadL=100, leadW=leadW, loopW=loopW, looplength_R=looplength_R, looplength_L=5,
+        #                 contactpads=True, contactW=20, contactL=10, wedgeL=10, shift=True, shiftW=0.5, layer='LOOP',
+        #                 contact_to_probe_leads=True, contact_to_probe_leads_Length=130)
+        # # bottom one.
+        # half_loop_leads2(self,
+        #                 m.Structure(self, start=(params['startpoint'][0]+i*arrayspacing_x+padw/2, params['startpoint'][1]+j*arrayspacing_y+100-separation/2),
+        #                 direction=0),
+        #                 start=(0,0),
+        #                 yflip=True,
+        #                 leadL=100, leadW=leadW, loopW=loopW, looplength_R=looplength_R, looplength_L=5,
+        #                 contactpads=True, contactW=20, contactL=10, wedgeL=10, shift=True, shiftW=0.5, layer='LOOP',
+        #                 contact_to_probe_leads=True, contact_to_probe_leads_Length=130)
+        
+
+
+    if FT:
+    # draw the flux transformer
+        flux_transformer(chip,
+            startpoint=(1565,2200),
+            large_rect_length=5000,
+            large_rect_width=2250,
+            small_rect_length=2500,
+            small_rect_width=100,
+            conductor_width=10,
+            Y_offset=0,
+            X_offset=0,
+            outer_radius=20,
+            inner_radius=10,
+            layer='FT'
+            )
+    if dosearray:
+    # draw the dose array--need to add the slot at least
+        add_dose_array(chip,
+                    startpoint=(35950,1450),
+                    arraydims=(6,2), 
+                    arrayspacing=1000, 
+                    doses=None, 
+                    basedose=1000,
+                    printdose=False,
+                    qubit='Transmon',
+                    dummyFT=False,
+                    #layer='DOSEARRAY'
+                    )
+        add_dose_array(chip,
+                    startpoint=(35950,4000),
+                    arraydims=(6,2), 
+                    arrayspacing=1000, 
+                    doses=None, 
+                    basedose=1000,
+                    printdose=False,
+                    qubit='SNAIL',
+                    #layer='DOSEARRAY'
+                    )
+
+
+
+
+
+# dose arrays by Tom. Todo: make qubit modular? Fix slot in pads. General improvements.
+def add_dose_array(chip, 
+                   startpoint=(0,0), 
+                   arraydims=(5,5), 
+                   arrayspacing=500, 
+                   doses=None, 
+                   basedose=1000,
+                   printdose=False,
+                   dummyFT=True,
+                   qubit=None, #can be 'Transmon' or 'SNAIL'
+                   probepads=True,
+                   transmon_number_label=True,
+                   JJparams_label=True,
+                   Doselabels=True,
+                   homeplates=True,
+                   **kwargs
+                   ):
+    '''
+    Draw a dose-test array of junctions (one per grid point). qubit selects the
+    style: 'Transmon' (bare smallJJ + leads), 'SNAIL', 'Fluxonium', or 'Shunt'.
+
+    Array-valued kwargs and how they are indexed per field (i,j):
+      indexed [i]    (1D, length arraydims[0]): smallfingerWs, bigfingerWs, bigJJfingerWs
+      indexed [j]    (1D, length arraydims[1]): bridgedoses
+      indexed [i][j] (2D, shape arraydims):     smallfingerdoses, bigfingerdoses, bigJJfingerdoses
+    Scalars are broadcast automatically.
+
+    NOTE: for transmon probe arrays consider the sweep system in
+    'junction array.py' (field_params/JunctionWithLeads) instead -- it
+    generates dose layers, field labels, and a parameter CSV automatically.
+    '''
+    # Add a dose array to the chip
+    if doses is None:
+        doses = np.ones(arraydims)*basedose
+    for i in range(arraydims[0]):
+        for j in range(arraydims[1]):
+            # params for "FT" and transmon 3D pads
+            params = {
+                'startpoint': startpoint,
+                'large_rect_length': 0,
+                'large_rect_width': 0,
+                'small_rect_length': 500,
+                'small_rect_width': 100,
+                'conductor_width': 10,
+                'Y-offset': 0,  # smallrect offset from the +Y side of the largerect
+                'X-offset': 0,  # offset of the +Y largerect line from the +X end of the small rectangle
+                'outer_radius': 20,
+                'inner_radius': 10
+            }
+
+
+            if dummyFT:
+                
+                FT_start = (params['startpoint'][0] + 75, params['startpoint'][1] - 0.5*params['small_rect_width'])
+                # Generate dummy FT coordinates using params variables. The dummy FT is just a filleted rectangle.
+                dummy_FT_pts_outer = [
+                    FT_start,
+                    (FT_start[0] + 500, FT_start[1]),
+                    (FT_start[0] + 500, FT_start[1] - params['small_rect_width']),
+                    (FT_start[0], FT_start[1] - params['small_rect_width']),
+                    FT_start
+                ]
+                dummy_FT_quadrants_outer = [2,1,4,3]
+                dummy_FT_clockwises_outer = [True, True, True, True]
+                filleted_points_outer = []
+                for point, quadrant, clockwise in zip(dummy_FT_pts_outer, dummy_FT_quadrants_outer, dummy_FT_clockwises_outer):
+                    radius = params['inner_radius'] if not clockwise else params['outer_radius']
+                    filleted_points_outer.extend(cornerRound(point, quadrant, radius, clockwise=clockwise))
+                chip.add(SolidPline((i*arrayspacing,j*arrayspacing), points=filleted_points_outer, layer='ARRAYFT'))
                 
 
+                dummy_FT_pts_inner = [
+                    (FT_start[0] + 10, FT_start[1] - 10),
+                    (FT_start[0] + 490, FT_start[1] - 10),
+                    (FT_start[0] + 490, FT_start[1] - params['small_rect_width'] + 10),
+                    (FT_start[0] + 10, FT_start[1] - params['small_rect_width'] + 10),
+                    (FT_start[0] + 10, FT_start[1] - 10)
+                ]
+                dummy_FT_quadrants_inner = dummy_FT_quadrants_outer
+                dummy_FT_clockwises_inner = dummy_FT_clockwises_outer
+                filleted_points_inner = []
+                for point, quadrant, clockwise in zip(dummy_FT_pts_inner, dummy_FT_quadrants_inner, dummy_FT_clockwises_inner):
+                    radius = params['outer_radius'] if not clockwise else params['inner_radius']
+                    filleted_points_inner.extend(cornerRound(point, quadrant, radius, clockwise=clockwise))
+                chip.add(SolidPline((i*arrayspacing,j*arrayspacing), points=filleted_points_inner, layer='ARRAYFT'))
 
-        shape = []
-        _heights = []
-        _widths = []
-
-        if len(radius_in) == 1 or len(radius_out) == 1:
-
-            radius_in *=6
-            radius_out *=6
-
-        if len(widths) ==1 or len(heights) == 1:
-
-
-            _widths = [widths[0]]*6
-            _heights = [heights[0]]*6
-
-        if len(tip_heights) == 1 or len(tip_widths) == 1:
-            tip_heights *=6
-            tip_widths *=6
-
-        
-
-
-        # correct the heights according to the tip parameters
-
-        for i in range(len(heights)):
-            if heights[i]>0:
-                if tip_heights[i] != 0:
-                    _heights.append(heights[i] - tip_heights[i])
-                else:
-                    _heights.append(heights[i] - 2*radius_out[i])
-            else:
-                _heights.append(0)
-        
-        _widths = widths
-
-
-        starmon = Star(pos, _widths, _heights, offset, **kwargs)
-        
-        shape.append(starmon)
-
-        star_pts = starmon.points
-
-
-        # return error if two consecutive branches are zero
-
-
-        # return error if the first branch is zero
-        _height_shift = np.roll(_heights,1)
-        edge_zero = [_heights[i]*_height_shift[i]==0 for i in range(len(_heights))]
-        # is_zero = np.roll([heights[i]==0 for i in range(len(heights))], 1)
-        is_zero = np.roll([_heights[i]==0 for i in range(len(_heights))], 0)
-
-        # if is_zero[1]:
-        #     raise ValueError('The first branch must have a non-zero length')
-        
-        # return error if two consecutive branches are zero, to do so check if two consecutive elements in heights are zero
-
-        # print(heights)
-        # for idx in range(len(heights)-1):
-        #     if (heights[idx] and heights[idx+1])==0:
-        #         raise ValueError('Two consecutive branches cannot have zero length')
+            #still need to make this take arguments from the kwargs or at least somewhere up higher
+            if qubit=='Transmon':
+                w = 90-1.74 if 'w' not in kwargs else kwargs['w']
+                # finger width varies along i; scalar is broadcast, default
+                # matches smallJJ's own default (0.21 um)
+                smallfingerWs = kwargs.get('smallfingerWs', 0.21)
+                if np.isscalar(smallfingerWs):
+                    smallfingerWs = np.full(arraydims[0], smallfingerWs)
+                smallJJ(chip,
+                        m.Structure(chip, start=(startpoint[0]+50.5+i*arrayspacing, startpoint[1]-100+j*arrayspacing),direction=90),
+                        bridgelayer=f'BRIDGE_{j}', smallfingerwidth=smallfingerWs[i],
+                        bridgeW=0.91, bridgeL=0.48
+                        )
+                Strip_contact(chip,
+                              m.Structure(chip, start=(startpoint[0]+49.5+i*arrayspacing, startpoint[1]-98.26+j*arrayspacing)),
+                              1,
+                              w=w,
+                              layer='LEADS'+str(i)+str(j),
+                              contactW=23,
+                              contactL=11.5)
+                Strip_contact(chip,
+                              m.Structure(chip, start=(startpoint[0]+49.5+i*arrayspacing, startpoint[1]-101.74+j*arrayspacing)),
+                              1,
+                              w=-w,
+                              layer='LEADS'+str(i)+str(j),
+                              contactW=23,
+                              contactL=11.5) #maybe fix the pad shape, it's a bit weird
             
+            if qubit=='SNAIL':
+                starterpoint=(startpoint[0]+i*arrayspacing, startpoint[1]+j*arrayspacing)
+                smallfingerWs=kwargs.get('smallfingerWs', 1)
+                bridgedoses=kwargs.get('bridgedoses', 1000)
 
-        # idx_corner_pts = [3*i - 2*np.sum(is_zero[:i]) if i>0 else 0 for i in range(len(widths))]
-        idx_corner_pts = [3*i - 2*np.sum(is_zero[:i]) for i in range(len(_widths))]
+                n_junc = kwargs.get('n_junc', 3)
 
-
-        ## too be added later the skip when no heights 
-
-
-        # fill the corner with InsideCurve 
-
-
-        dangle = 0.01 # add a bit so that there is an overlap
+                small_finger_doses = kwargs.get('smallfingerdoses', np.ones(arraydims))
+                big_finger_doses = kwargs.get('bigfingerdoses', np.ones(arraydims))
 
 
+                big_JJ_finger_doses = kwargs.get('bigJJfingerdoses', np.ones(arraydims))
 
-        for i in range(len(idx_corner_pts)):
+                big_JJ_finger_widths  = kwargs.get('bigJJfingerWs', 0.41)
+                big_JJ_finger_length = kwargs.get('big_JJ_finger_length', 2.2)
 
-            pts_inside = (pos[0] + star_pts[idx_corner_pts[i]][0], pos[1] + star_pts[idx_corner_pts[i]][1])
+                snailTF = kwargs.get('snailTF', True)
+                big_JJ_chainTF = kwargs.get('big_JJ_chainTF', False)
+                small_JJTF = kwargs.get('small_JJTF', True)
+
+                # broadcast scalars to arrays shaped for how each is indexed
+                # below: [i] -> length arraydims[0], [j] -> length arraydims[1],
+                # [i][j] -> full 2D arraydims
+                if np.isscalar(smallfingerWs):
+                    smallfingerWs = np.full(arraydims[0], smallfingerWs)
+                if np.isscalar(big_JJ_finger_widths):
+                    big_JJ_finger_widths = np.full(arraydims[0], big_JJ_finger_widths)
+                if np.isscalar(bridgedoses):
+                    bridgedoses = np.full(arraydims[1], bridgedoses)
+                if np.isscalar(small_finger_doses):
+                    small_finger_doses = np.full(arraydims, small_finger_doses)
+                if np.isscalar(big_finger_doses):
+                    big_finger_doses = np.full(arraydims, big_finger_doses)
+                if np.isscalar(big_JJ_finger_doses):
+                    big_JJ_finger_doses = np.full(arraydims, big_JJ_finger_doses)
+
+                # print(smallfingerWs, "smallfingerWs")
+                # print(small_finger_doses, "small_finger_doses")
+                # print(big_finger_doses, "big_finger_doses")
+                # print(big_JJ_finger_doses, "big_JJ_finger_doses")
+                # print(big_JJ_finger_widths, "big_JJ_finger_widths")
+                # print(bridgedoses, "bridgedoses")
+
+                # print(smallfingerWs)
+                # print(big_JJ_finger_doses, "big_JJ_finger_doses")
+                Snailmon3D(chip, 
+                            startpoint=starterpoint, 
+                            pads=False, 
+                            snail=snailTF, 
+                            small_JJ=small_JJTF,
+                            big_JJ_chain=big_JJ_chainTF,
+                            FT=False, 
+                            dosearray=False, 
+                            alignstrip=False,
+                            homeplates=homeplates,
+
+                            smallfinger_dose = small_finger_doses[i][j],
+                            bigfinger_dose = big_finger_doses[i][j],
+                            smallfingerwidth=smallfingerWs[i],
+                            smallfingerW=smallfingerWs[i],
+                            #bridge_width=bridgeWs[j],
+
+                            bridge_dose=bridgedoses[j],
+
+                            n_junc = n_junc,
+                            big_JJ_finger_length = big_JJ_finger_length,
+                            big_JJ_finger_width = big_JJ_finger_widths[i],
+                            big_JJ_finger_dose = big_JJ_finger_doses[i][j],
+                           ) 
 
 
-            if not(edge_zero[i]) :
-                corner = InsideCurve(pts_inside,rotation=-90 -60*i - dangle/2,angle = 60 + dangle, radius = radius_in[i],
-                                    **kwargs)
-            # elif not(edge_zero[i]) and not(is_zero[i]):
-            elif edge_zero[i] and (is_zero[i]):
-                corner = InsideCurve(pts_inside,rotation=-180 -60*i- dangle/2,angle = 150 + dangle, radius = radius_in[i],
-                                    **kwargs)
-                
-            elif edge_zero[i] and not(is_zero[i]):
-                corner = InsideCurve(pts_inside,rotation=-90 -60*i- dangle/2,angle = 150 + dangle, radius = radius_in[i],
-                                    **kwargs)
 
-                
-            # else:
-            #     corner = InsideCurve(pts_inside,rotation=-90 -*i,angle = 120, radius = 0,
-            #                         **kwargs)
-            shape.append(corner)
+            if qubit == 'Fluxonium':
+                starterpoint = (startpoint[0] + i*arrayspacing,
+                                startpoint[1] + j*arrayspacing)
+
+                # --- dose arrays / parameters ---
+                n_junc = kwargs.get('n_junc', 3)
+
+                small_finger_doses = kwargs.get('smallfingerdoses', np.ones(arraydims))
+                big_finger_doses   = kwargs.get('bigfingerdoses', np.ones(arraydims))
+
+                smallfingerWs = kwargs.get('smallfingerWs', 1)
+                bigfingerWs   = kwargs.get('bigfingerWs', 0.41)
+
+                bridge_doses  = kwargs.get('bridgedoses', np.ones(arraydims))
+
+                # scalar -> array safety; widths are indexed [i] below, so
+                # they must be 1D of length arraydims[0] (not 2D)
+                if np.isscalar(smallfingerWs):
+                    smallfingerWs = np.full(arraydims[0], smallfingerWs)
+                if np.isscalar(bigfingerWs):
+                    bigfingerWs = np.full(arraydims[0], bigfingerWs)
+                if np.isscalar(bridge_doses):
+                    bridge_doses = np.full(arraydims, bridge_doses)
+
+                # --- call Fluxonium generator ---
+                Fluxonium3D(
+                    chip,
+                    startpoint=starterpoint,
+                    addFlagPads=False,      # dose array → no large pads
+                    addLoop=True,
+                    FT=False,
+                    dosearray=False,
+                    alignstrip=False,
+
+                    n_junc=n_junc,
+
+                    smallfinger_dose=small_finger_doses[i][j],
+                    bigfinger_dose=big_finger_doses[i][j],
+
+                    smallfingerwidth=smallfingerWs[i],
+                    bigfinger_width=bigfingerWs[i],
+
+                    bridge_dose=bridge_doses[i][j],
+
+                    homeplates=homeplates,
+                )
 
 
-        # add the rounded corner at the end of the branch
+
+
+            if qubit=='Shunt':
+                no_loop_leads(chip, 
+                              m.Structure(chip, start=(startpoint[0]+i*arrayspacing, startpoint[1]+j*arrayspacing)), 
+                              start=(50,-100),           
+                              leadL=100, 
+                              leadW=1, 
+                              contactpads=True, 
+                              contactL=11.5, 
+                              contactW=23, 
+                              layer='LEAD', 
+                              startshifty=1.5
+                              )
 
 
 
-        dl= 30e-3
-        # for i in range(len(idx_corner_pts)):
-        for i in range(len(idx_corner_pts)):
-                
-                if _heights[i]!=0:
 
-                    if tip_widths[i]==0 or tip_widths[i] == _widths[i]:
-                    
-                        start_points = (pos[0]+star_pts[idx_corner_pts[i]+1][0], pos[1]+star_pts[idx_corner_pts[i]+1][1])
-                        tip = RoundRect(start_points, height=radius_out[i]*2, radius=radius_out[i],width=_widths[i], roundCorners=[0,0,1,1],
-                                        rotation= - 60*i,**kwargs)
-                        
+
+
+
+            # Draw transmon 3D pads with shunt
+            if probepads:
+                probe_pad_start = (params['startpoint'][0]+i*arrayspacing+3500, params['startpoint'][1]+j*arrayspacing+3500)
+                # print("probe pads startpoint: ", probe_pad_start)
+                Transmon3DWithShunt(chip, 
+                                    # (params['startpoint'][0]+i*arrayspacing, params['startpoint'][1]+j*arrayspacing) , 
+                                    probe_pad_start,
+                                    padw=100, padh=100, leadw=100, leadh=2000, 
+                                    separation=200, tab=False, shunt=True, shunt_width=10, shunt_dist=150, shunt_length=300, shunt_side='left', flipped=True)
+
+            # labels
+            arrayspacing_x = arrayspacing
+            arrayspacing_y = arrayspacing
+            padw = 200#1500
+            padh = 200# 750
+
+            fontsize=20
+            xpos = params['startpoint'][0]+i*arrayspacing_x+padw
+            ypos = params['startpoint'][1]+j*arrayspacing_y+padh
+
+            
+            #extract the JJ parameters from kwargs
+            finger_length = kwargs.get('finger_length', 1.5)
+            finger_width = kwargs.get('finger_width', 1)
+            bigfinger_length = kwargs.get('bigfinger_length', 1.5)
+            bigfinger_width = kwargs.get('bigfinger_width', 0.41)
+            bridge_length = kwargs.get('bridge_length', 0.48)
+            bridge_width = kwargs.get('bridge_width', 0.91)
+
+            #extract the dose parameters from kwargs
+            leads_contactpads_dose = kwargs.get('leads_contactpads_dose', 1)
+            bridge_dose = kwargs.get('bridge_dose', 'Bridge dose ' + str(i) + ',' + str(j))
+            bigfinger_dose = kwargs.get('bigfinger_dose', 1)
+            smallfinger_dose = kwargs.get('smallfinger_dose', 1)
+            undercut_dose = kwargs.get('undercut_dose', 1)
+            shift_dose = kwargs.get('shift_dose', 1)
+            label_dose = kwargs.get('label_dose', 1)
+
+            separation = 25
+
+
+
+            if transmon_number_label == True:
+                chip.add_chip_label('JJ ('+str(i)+','+str(j)+')', layer='LABEL', 
+                                    position=(xpos, params['startpoint'][1]+j*arrayspacing_y+padh-150), height=fontsize
+                                    )            
+            if JJparams_label == True:
+                ypos = ypos-fontsize-15
+                label_list =               [finger_length,  finger_width,   bigfinger_length, bigfinger_width, bridge_length , bridge_width]
+                for ii,label in enumerate(['SmallFingerL', 'SmallFingerW', 'BigfingerL',     'BigFingerW',    'BridgeL',      'BridgeW' ]):
+                    chip.add_chip_label(label+ ' = ' + str(round(label_list[ii], 3)), 
+                                    layer='LABEL', 
+                                    position=(xpos, ypos), height=fontsize
+                                    )
+                    ypos-=fontsize+10
+            if Doselabels == True:
+                ypos = params['startpoint'][1]+j*arrayspacing_y-separation
+                label_list = [leads_contactpads_dose, bridge_dose, bigfinger_dose, smallfinger_dose, undercut_dose, shift_dose, label_dose]
+                for ii, label in enumerate(['leads_contactpads_dose', 'bridge_dose', 'bigfinger_dose', 'smallfinger_dose', 'undercut_dose', 
+                                            'shift_dose', 'label_dose']):
+                    if label == 'leads_contactpads_dose':
+                        xpos+=70
+                    # (was `type(x) == (float or int)`, which only ever
+                    # checked float -- `(float or int)` evaluates to float)
+                    if isinstance(label_list[ii], (int, float)):
+                        chip.add_chip_label(label+ ' = ' + str(round(label_list[ii], 3)),
+                                    layer='LABEL',
+                                    position=(xpos, ypos), height=fontsize
+                                    )
                     else:
-                        dw = (tip_widths[i] - _widths[i])/2 
-                        start_points = (pos[0]+star_pts[idx_corner_pts[i]+1][0] - (dw)*np.cos(np.pi/3*i) - dl*np.sin(np.pi/3*i), pos[1]+star_pts[idx_corner_pts[i]+1][1] + (dw)*np.sin(np.pi/3*i) - dl*np.cos(np.pi/3*i))
-                        tip = RoundRect(start_points, height=tip_heights[i], radius=radius_out[i],width=tip_widths[i], roundCorners=[1,1,1,1],
-                                        rotation= - 60*i,**kwargs)
+                        chip.add_chip_label(label+ ' = ' + str(label_list[ii]),
+                                    layer='LABEL',
+                                    position=(xpos, ypos), height=fontsize
+                                    )
+                    ypos-=fontsize+10
                 
-                    shape.append(tip)
 
 
-        return shape
 
 
-    # add the rounded star 
-    roundstar = RoundStar(struct().start, widths=widths, heights=heights, offset=offset,radius_in=radius_in,
-                        radius_out=radius_out, tip_widths=tip_widths, tip_heights=tip_heights, 
-                        layer=MLAYER,bgcolor=chip.bg(MLAYER),**kwargs)
-
-    # add all the shape to the chip
-
-    for shape in roundstar:
-        chip.add(shape)
-            
-    
-    # add the Ground layer
-    
-    if len(dist_to_ground_heights) == 1 or len(dist_to_ground_widths) == 1:
-        dist_to_ground_heights *=6
-        dist_to_ground_widths *=6
-
-
-    if len(dist_to_ground_widths_tip) == 1:
-        dist_to_ground_widths_tip *=6
-
-    if len(dist_to_ground_heights_tip)==1:
-        dist_to_ground_heights_tip *=6
-    
-    # add the ground distance to the widths and heights
-
-    widths_gnd = [widths[i]+ 2*dist_to_ground_widths[i] for i in range(len(widths))]
-    tip_widths_gnd = [tip_widths[i]+ 2*dist_to_ground_widths_tip[i] if tip_widths[i]>0 else 0 for i in range(len(tip_widths))]
-    # tip_widths_gnd =[0] 
-
-
-    # add the ground distance to the heights if the height is positive it is zero otherwise
-    heights_gnd = [heights[i] + dist_to_ground_heights[i] - dist_to_ground_widths[i]/np.cos(np.pi/6) -dist_to_ground_widths[i]*np.tan(np.pi/6) if heights[i]>0 else 0 for i in range(len(heights))]
-    # tip_heights_gnd = [tip_heights[i] + dist_to_ground_heights[i] - dist_to_ground_widths[i]/np.cos(np.pi/6) -dist_to_ground_widths[i]*np.tan(np.pi/6) if tip_heights[i]>0 else 0 for i in range(len(tip_heights))]
-    tip_heights_gnd = [tip_heights[i] + 2*dist_to_ground_heights_tip[i] if tip_heights[i]>0 else 0 for i in range(len(tip_heights))]
-    # tip_heights_gnd =[0]
-
-
-    pts_start_gnd = struct().getPos((-dist_to_ground_widths[0], dist_to_ground_widths[-1]/np.cos(np.pi/6) +dist_to_ground_widths[0]*np.tan(np.pi/6)))
-
-    print(heights)
-    print(heights_gnd)
-
-
-    roundstar = RoundStar(pts_start_gnd, widths=widths_gnd, heights=heights_gnd,radius_in=radius_in,tip_heights=tip_heights_gnd,tip_widths=tip_widths_gnd,offset=offset,
-                    radius_out=radius_out, bgcolor=bgcolor,**kwargs)
-    
-
-    
-    for shape in roundstar:
-        chip.add(shape)
-
-
-    # add the junction parts 
-
-    # get the junction location
-
-    star_point = roundstar[0].points
-    s = struct().cloneAlong(distance=0, newDirection=0)
-    is_zero = np.roll([heights[i]==0 for i in range(len(heights))], 0)
-
-    if jj_branch == 'up':
-
-        if jj_loc == 'center':
-
-            vector_start = (star_point[0][0] + widths[0]/2, heights[0])
-            direction = 90
-
-        elif jj_loc =='left':
-
-            if is_zero[0]:
-                # return error if the first branch is zero
-                print('The first branch must have a non-zero length if the junction is aside')
-
-            vector_start = (star_point[0][0]-dist_to_ground_widths[0], 5*heights[0]/6)
-            direction=0
-        
-        elif jj_loc =='right':
-
-            if is_zero[0]:
-                # return error if the first branch is zero
-                print('The first branch must have a non-zero length if the junction is aside')
-
-            vector_start = (star_point[0][0]+widths[0], 5*heights[0]/6)
-            direction=0
-
-        else:
-            raise ValueError('The junction location is not valid ' + jj_loc)
-
-    elif jj_branch == 'down':
-
-        idx_point = np.sum(is_zero[2])*3 
-
-        if jj_loc == 'center':
-
-            vector_start = (star_point[idx_point][0] + widths[3]/2,-heights[3] - np.cos(np.pi/6) * (widths[1] + widths[2]))
-            direction = -90
-        
-        elif jj_loc =='left':
-
-            if is_zero[3]:
-                # return error if the first branch is zero
-                print('The third branch must have a non-zero length if the junction is aside')
-
-            vector_start = (star_point[idx_point][0] - dist_to_ground_widths[3],-5*heights[3]/6 - np.cos(np.pi/6) * (widths[1] + widths[2]))
-            direction = 0
-
-        elif jj_loc =='right':
-
-            if is_zero[3]:
-                # return error if the first branch is zero
-                print('The third branch must have a non-zero length if the junction is aside')
-
-            vector_start = (star_point[idx_point][0] + widths[3],-5*heights[3]/6 - np.cos(np.pi/6) * (widths[1] + widths[2]))
-            direction = 0
-
-
-
-    sjj = s.cloneAlongLast(vector=vector_start, newDirection=direction)
-
-
-    if jj_loc == 'center':
-        junctionl = dist_to_ground_heights[0]
-        if is_zero[0]:
-            junctionl = dist_to_ground_widths[-1]/np.cos(np.pi/6) +dist_to_ground_widths[0]*np.tan(np.pi/6)
-    else:
-        junctionl = dist_to_ground_widths[0]
-
-    JContact_tab(chip, sjj.cloneAlong(newDirection=180),layer=XLAYER,bgcolor=chip.bg(XLAYER), **kwargs)
-    #keep junction method general
-    junctionClass(chip,sjj.cloneAlong(distance=junctionl/2), junctionl=junctionl, backward=jj_reverse, separation=junctionl,**kwargs)
-    JContact_tab(chip, sjj.cloneAlong(distance=junctionl),layer=XLAYER,bgcolor=chip.bg(XLAYER), **kwargs)
-
-
-    s = struct().cloneAlong(distance=0, newDirection=rotation)
-
-    return s
-
-
-
-
-        # JProbePads(chip, sjj,rotation=sjj.direction,layer=XLAYER,bgcolor=chip.bg(XLAYER),separation = junctionl,**kwargs)
-    
-        # ManhattanJunction(chip, sjj, rotation=sjj.direction,separation = junctionl, **kwargs)
-
-
-def Headsetmon(chip, pos, pad_width=100, pad_length=100, pad_distance=40, pad_radius=10, ground_distance=10,jcont_dist=60,
-               ground_pocket_width= 75, ground_pocket_length=40, ground_pocket_radius=5,
-               offset=0, rotation=0, r_out=None,
-                r_ins=None, bgcolor=None, XLAYER=None, MLAYER=None,squid=False, jj_loc='down', jj_reverse=False, junctionClass=DolanJunction,**kwargs):
-    
-
-    thisStructure = None
-    if isinstance(pos, m.Structure):
-        rotation = pos.direction
-    elif isinstance(pos,tuple):
-        thisStructure = m.Structure(chip,start=pos,direction=rotation)
-        
-    def struct():
-        if isinstance(pos,m.Structure):
-            return pos
-        elif isinstance(pos,tuple):
-            return thisStructure
-        else:
-            return chip.structure(pos)
-        
-    if bgcolor is None: #color for junction, not undercut
-        bgcolor = chip.wafer.bg()
-    
-    #get layers from wafer
-    if XLAYER is None:
-        try:
-            XLAYER = chip.wafer.XLAYER
-        except AttributeError:
-            chip.wafer.setupXORlayer()
-            XLAYER = chip.wafer.XLAYER
-
-
-    # add the first pad which is a round rect
-
-    s = struct().cloneAlong(vector=(0,0), newDirection=0)
-    pad1 = RoundRect(s.getPos(), height=pad_length, radius=pad_radius, width=pad_width, ralign=const.TOP, angle=90, rotation=rotation, layer=MLAYER, bgcolor=chip.bg(MLAYER), **kwargs)
-    chip.add(pad1)
-
-    # add the second pad which is a round rect
-
-    s = struct().cloneAlong(vector=(pad_distance + pad_width,0), newDirection=0)
-    pad2 = RoundRect(s.getPos(), height=pad_length, radius=pad_radius, width=pad_width, ralign=const.TOP, angle=90, rotation=rotation, layer=MLAYER, bgcolor=chip.bg(MLAYER), **kwargs)
-    chip.add(pad2)
-
-
-
-    # add the ground layer around the pads
-
-    s = struct().cloneAlongLast(vector=(-ground_distance,-ground_distance), newDirection=0)
-
-    ground_plane = RoundRect(s.getPos(), height=pad_length + 2*ground_distance, radius=pad_radius, width=2*pad_width + 2*ground_distance + pad_distance, 
-                             ralign=const.TOP, angle=s.direction+90, rotation=rotation, bgcolor=bgcolor, **kwargs)
-    
-    chip.add(ground_plane)
-
-    # add the junction parts
-
-    if jj_loc == 'down':
-
-        scont1 = s.cloneAlong(vector=(pad_width+ground_distance - (jcont_dist-pad_distance)/2,ground_distance), newDirection=90)
-        scont2 = s.cloneAlong(vector=(pad_width + ground_distance + pad_distance/2 + jcont_dist/2 ,ground_distance), newDirection=90)
-
-        JContact_tab(chip, scont1.cloneAlong(newDirection=0),layer=XLAYER,bgcolor=chip.bg(XLAYER), **kwargs)
-        DolanJunction(chip,scont1.cloneAlong(vector=(0, -jcont_dist/2), newDirection=-90), junctionl=(jcont_dist), backward=jj_reverse, separation=jcont_dist,sidelink=True,squid=True,**kwargs)
-        JContact_tab(chip, scont2.cloneAlong(newDirection=0),layer=XLAYER,bgcolor=chip.bg(XLAYER), **kwargs)
-
-        s_pocket = struct().cloneAlong(vector=(pad_width + ground_distance - ground_pocket_width/2, 
-                                             - ground_pocket_length- ground_distance), newDirection=0)
-    
-        ground_pocket = RoundRect(s_pocket.getPos(), height=ground_pocket_length, radius=ground_pocket_radius,
-                               width=ground_pocket_width, roundCorners=[1,1,0,0], rotation=rotation, bgcolor=bgcolor, **kwargs)
-
-    if jj_loc == 'up':
-
-        scont1 = s.cloneAlong(vector=(pad_width+ground_distance - (jcont_dist-pad_distance)/2,ground_distance + pad_length), newDirection=-90)
-        scont2 = s.cloneAlong(vector=(pad_width + ground_distance + pad_distance/2 + jcont_dist/2 ,ground_distance + pad_length), newDirection=-90)
-
-        JContact_tab(chip, scont1.cloneAlong(newDirection=0),layer=XLAYER,bgcolor=chip.bg(XLAYER), **kwargs)
-        DolanJunction(chip,scont1.cloneAlong(vector=(0, jcont_dist/2), newDirection=-90), junctionl=(jcont_dist), backward=jj_reverse, separation=jcont_dist,sidelink=True,squid=True,**kwargs)
-        JContact_tab(chip, scont2.cloneAlong(newDirection=0),layer=XLAYER,bgcolor=chip.bg(XLAYER), **kwargs)
-
-        # add the ground pocket around the junction or squid
-
-        s_pocket = struct().cloneAlong(vector=(pad_width + ground_distance - ground_pocket_width/2, 
-                                                + pad_length+ ground_distance), newDirection=0)
-        
-        ground_pocket = RoundRect(s_pocket.getPos(), height=ground_pocket_length, radius=ground_pocket_radius,
-                                width=ground_pocket_width, roundCorners=[0,0,1,1], rotation=rotation, bgcolor=bgcolor, **kwargs)
-    
-    chip.add(ground_pocket)
-
-    return s
-
-
-
-
-
-
-
-
-
-    
-
-
-
-
-
-
-    
-
-
-            
-    
+def add_JJ_dose_array(chip,
+                   startpoint=(0,0),
+                   arraydims=(5,5),
+                   arrayspacing=500,
+                   doses=None,
+                   basedose=1000,
+                   printdose=False,
+                   optlayer='OPTICAL',
+                   JJlayer='JJ',
+                   FT=False):
+    '''
+    LEGACY: draws a grid of shunted transmon pads (plus optional dummy FT
+    rectangles) with no junctions. Nothing in this repo calls it -- for real
+    dose arrays see add_dose_array or the sweep system in 'junction array.py'.
+    '''
+    # Add a dose array to the chip
+    if doses is None:
+        doses = np.ones(arraydims)*basedose
+    for i in range(arraydims[0]):
+        for j in range(arraydims[1]):                
+            params = {
+                'startpoint': startpoint,
+                'large_rect_length': 0,
+                'large_rect_width': 0,
+                'small_rect_length': 500,
+                'small_rect_width': 100,
+                'conductor_width': 10,
+                'Y-offset': 0,  # smallrect offset from the +Y side of the largerect
+                'X-offset': 0,  # offset of the +Y largerect line from the +X end of the small rectangle
+                'outer_radius': 20,
+                'inner_radius': 10
+            }
+            if FT: # params for "FT" and transmon 3D pads
+                FT_start = (params['startpoint'][0] + 75, params['startpoint'][1] - 0.5*params['small_rect_width'])
+                # Generate dummy FT coordinates using params variables. The dummy FT is just a filleted rectangle.
+                dummy_FT_pts_outer = [
+                    FT_start,
+                    (FT_start[0] + 500, FT_start[1]),
+                    (FT_start[0] + 500, FT_start[1] - params['small_rect_width']),
+                    (FT_start[0], FT_start[1] - params['small_rect_width']),
+                    FT_start
+                ]
+                dummy_FT_quadrants_outer = [2,1,4,3]
+                dummy_FT_clockwises_outer = [True, True, True, True]
+                filleted_points_outer = []
+                for point, quadrant, clockwise in zip(dummy_FT_pts_outer, dummy_FT_quadrants_outer, dummy_FT_clockwises_outer):
+                    radius = params['inner_radius'] if not clockwise else params['outer_radius']
+                    filleted_points_outer.extend(cornerRound(point, quadrant, radius, clockwise=clockwise))
+                chip.add(SolidPline((i*arrayspacing,j*arrayspacing), points=filleted_points_outer, layer=optlayer))
+                
+
+                dummy_FT_pts_inner = [
+                    (FT_start[0] + 10, FT_start[1] - 10),
+                    (FT_start[0] + 490, FT_start[1] - 10),
+                    (FT_start[0] + 490, FT_start[1] - params['small_rect_width'] + 10),
+                    (FT_start[0] + 10, FT_start[1] - params['small_rect_width'] + 10),
+                    (FT_start[0] + 10, FT_start[1] - 10)
+                ]
+                dummy_FT_quadrants_inner = dummy_FT_quadrants_outer
+                dummy_FT_clockwises_inner = dummy_FT_clockwises_outer
+                filleted_points_inner = []
+                for point, quadrant, clockwise in zip(dummy_FT_pts_inner, dummy_FT_quadrants_inner, dummy_FT_clockwises_inner):
+                    radius = params['outer_radius'] if not clockwise else params['inner_radius']
+                    filleted_points_inner.extend(cornerRound(point, quadrant, radius, clockwise=clockwise))
+                chip.add(SolidPline((i*arrayspacing,j*arrayspacing), points=filleted_points_inner, layer=optlayer))
+
+            # Draw a transmon 3D with shunt
+            Transmon3DWithShunt(chip, (params['startpoint'][0]+i*arrayspacing, params['startpoint'][1]+j*arrayspacing) , padw=100, padh=300, leadw=100, leadh=2000, separation=200, shunt=True, shunt_width=10, shunt_dist=150, shunt_length=400, shunt_side='left', flipped=True,layer='DOSEARRAY')

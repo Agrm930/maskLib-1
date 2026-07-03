@@ -8,6 +8,7 @@ from dxfwrite import DXFEngine as dxf
 from dxfwrite.algebra import rotate_2d
 from dxfwrite.vector2d import vadd,midpoint,vmul_scalar,vsub
 import math
+import numpy as np
 
 # ===============================================================================
 #  UTILITY FUNCTIONS  
@@ -75,3 +76,21 @@ def doMirrored(func,canvas,pos,*args,**kwargs):
         func(canvas,(-pos[0],pos[1]),*args,**kwargs)
     if mirrorY and mirrorX:
         func(canvas,(-pos[0],-pos[1]),*args,**kwargs)
+
+def snap_to_grid(pt, grid=None):
+    """
+    Snap a point or array of points to the nearest grid.
+    Supports scalars, tuples, lists, or numpy arrays.
+    Always returns floats for tuples/lists.
+    If grid is None or 0, returns the original point (no snapping).
+    """
+    if grid is None or grid == 0:
+        return pt
+    arr = np.asarray(pt, dtype=float)
+    snapped = np.round(arr / grid) * grid
+    if isinstance(pt, (tuple, list)):
+        return tuple(snapped.tolist())
+    elif np.isscalar(pt):
+        return float(snapped)
+    else:
+        return snapped

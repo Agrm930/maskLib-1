@@ -3,7 +3,6 @@
 Created on Fri Jan  5 12:35:23 2018
 
 @author: sasha
-Edited by Agrim, 2026 (updated ezdxf font imports; moved deprecated functions to MaskLib_old.py)
 """
 import math
 import os
@@ -20,10 +19,9 @@ from dxfwrite.algebra import rotate_2d
 import ezdxf
 from ezdxf.addons import text2path
 from ezdxf.math import Matrix44
-# from ezdxf.gfxattribs import GfxAttribs
+from ezdxf.gfxattribs import GfxAttribs
 from ezdxf.tools import text
-# from ezdxf.enums import MTextEntityAlignment
-# (ezdxf.tools.fonts was removed in ezdxf v1.x -- font tools now live in ezdxf.fonts.fonts)
+from ezdxf.enums import MTextEntityAlignment
 
 import math
 
@@ -39,9 +37,9 @@ from dxfwrite.algebra import rotate_2d
 import ezdxf
 from ezdxf.addons import text2path
 from ezdxf.math import Matrix44
-# from ezdxf.gfxattribs import GfxAttribs
+from ezdxf.gfxattribs import GfxAttribs
 from ezdxf.tools import text
-# from ezdxf.enums import MTextEntityAlignment
+from ezdxf.enums import MTextEntityAlignment
 
 import math
 
@@ -57,9 +55,9 @@ from dxfwrite.algebra import rotate_2d
 import ezdxf
 from ezdxf.addons import text2path
 from ezdxf.math import Matrix44
-# from ezdxf.gfxattribs import GfxAttribs
+from ezdxf.gfxattribs import GfxAttribs
 from ezdxf.tools import text
-# from ezdxf.enums import MTextEntityAlignment
+from ezdxf.enums import MTextEntityAlignment
 from dxfwrite import DXFEngine as engine
 
 # ===============================================================================
@@ -68,21 +66,81 @@ from dxfwrite import DXFEngine as engine
 waferDiameters = {'2in':50800,'3in':76200,'4in':101600,'6in':152400}
 sawWidths = {'4A':101.6,'8A':203.2}
 
-# NOTE: the deprecated module-level functions that used to live here
-# (HiVisMarker09, curveAB, corner, transformedQuadrants, skewRect) were
-# removed in 2026. Use markerLib.HiVisMarker09, utilities.curveAB,
-# utilities.cornerRound, utilities.transformedQuadrants, and
-# Entities.SkewRect instead (argument conventions differ slightly -- see
-# each function's docstring). The old versions are preserved in
-# MaskLib_old.py if you need to reference them.
+# ===============================================================================
+#  MARKER FUNCTIONS (Deprecated- use functions from masklib.markerLib)
+# ===============================================================================
+#Define Marker Function for numbers 0-9
+#High visibility markers composed of a grid of six squares
+def HiVisMarker09(dwg,xpos,ypos,number,width,bg=None,**kwargs):
+    #>>>>>>>> Deprecated, use markerLib.HiVisMarker09 instead <<<<<<<<<<
+    shapes = [[],  [[0,0]],  [[0,0],[1,1]],    [[0,0],[1,1],[0,1]],  [[0,0],[0,1],[2,0],[2,1]],
+             [[0,1],[1,0],[2,1]],  [[0,0],[1,0],[2,0],[1,1]],   [[0,0],[0,1],[1,0],[1,1],[2,1]], [[0,0],[0,1],[1,0],[1,1]],
+             [[0,0],[1,0],[1,1],[2,1]]]
+    number = number % len(shapes)
+    for v in shapes[number]:
+        dwg.add(dxf.rectangle((xpos+v[0]*width,ypos+v[1]*width),width,width,bgcolor=bg,**kwargs))
+   
+# ===============================================================================
+#  UTILITY FUNCTIONS  (Deprecated - use functions from masklib.utilities)
+# ===============================================================================
+def curveAB(a,b,clockwise,angleDeg,ptDensity):
+    #>>>>>>>> Deprecated, use utilities.curveAB instead <<<<<<<<<<
+    
+    #generate a segmented curve from A to B specified by angle. Point density = #pts / revolution
+    #return list of points
+    angle = math.radians(angleDeg)
+    segments = int(angle/(2*math.pi) *ptDensity)
+    center = vadd(midpoint(a,b),vmul_scalar(rotate_2d(vsub(b,a),-clockwise*math.pi/2),0.5/math.tan(angle/2)))
+    points = []
+    for i in range(segments+1):
+        points.append(vadd(center,rotate_2d(vsub(a,center),-clockwise*i*angle/segments)))
+    return points
+
+def corner(vertex,quadrant,clockwise,L,ptDensity):
+    #>>>>>>>> Deprecated, use utilities.cornerRound instead <<<<<<<<<<
+    
+    #quadrant corresponds to quadrants 1-4
+    #generate a curve to replace the vertex
+    ptA = vadd(vertex,rotate_2d((0,L),quadrant * math.pi/2))
+    ptB = vadd(vertex,rotate_2d((0,L),(quadrant+1) * math.pi/2))
+
+    return clockwise>0 and curveAB(ptA,ptB,1,90,ptDensity) or curveAB(ptB,ptA,-1,90,ptDensity)
+
+def transformedQuadrants(UD=1,LR=1):
+    #>>>>>>>> Deprecated, use utilities.transformedQuadrants instead <<<<<<<<<<
+    
+    #return quadrant list with up/down left/right flips applied
+    return UD==1 and (LR==1 and [0,1,2,3,4] or [0,2,1,4,3]) or (LR==1 and [0,4,3,2,1] or [0,3,4,1,2])
+
+def skewRect(corner,width,height,offset,newLength,edge=1,**kwargs):
+    #>>>>>>>> Deprecated, use Entities.SkewRect instead <<<<<<<<<<
+    
+    #quadrangle drawn counterclockwise starting from bottom left
+    #edges are indexed 0-3 correspondingly
+    #edge 1 is default (east edge )
+    pts =  [(corner[0],corner[1]),(corner[0]+width,corner[1]),
+            (corner[0]+width,corner[1]+height),(corner[0],corner[1]+height)]
+    direction = edge//2 > 0 and -1 or 1
+    if(edge%2==0): #horizontal
+        delta = 0.5*(newLength-width)*direction
+        pts[edge] = (pts[edge][0]+offset[0]-delta,pts[edge][1]+offset[1])
+        pts[(edge+1)%4] = (pts[(edge+1)%4][0]+offset[0]+delta,pts[(edge+1)%4][1]+offset[1])
+    else: #vertical
+        delta = 0.5*(newLength-height)*direction
+        pts[edge] = (pts[edge][0]+offset[0],pts[edge][1]+offset[1]-delta)
+        pts[(edge+1)%4] = (pts[(edge+1)%4][0]+offset[0],pts[(edge+1)%4][1]+offset[1]+delta)
+        
+    taper = dxf.polyline(points = pts,flags=0,**kwargs)
+    taper.close()
+    return taper
 
 # ===============================================================================
-#  WAFER CLASS
+#  WAFER CLASS  
 #       master class designed to handle all layers, main dxf drawing and stores chips
 # ===============================================================================
 class Wafer:
 
-    def __init__(self,name,path,chipWidth,chipHeight,waferDiameter=50800,padding=2500,sawWidth=203.2,frame=True,markers=True,solid=False,multiLayer=True,singleChipRow=False,singleChipColumn=False,centerChip=False,**kwargs):
+    def __init__(self,name,path,chipWidth,chipHeight,waferDiameter=50800,padding=2500,sawWidth=203.2,frame=True,markers=True,solid=False,multiLayer=True,singleChipRow=False,singleChipColumn=False):
         # initialize drawing
         self.fileName = name
         self.path = path
@@ -97,11 +155,6 @@ class Wafer:
         self.waferDiameter = waferDiameter
         self.padding = padding
         self.sawWidth = sawWidth
-        # if centerChip:
-        #     self.chipX = -0.5*(chipWidth + sawWidth)
-        #     self.chipY = -0.5*(chipHeight + sawWidth)
-        # else:
-        self.centerChip = centerChip
         self.chipX = chipWidth + sawWidth
         self.chipY = chipHeight + sawWidth
         self.frame = frame              #draw frame layer?
@@ -116,14 +169,12 @@ class Wafer:
         self.layerColors = {'0':7} #colors corresponding to layers
         self.layerNums = {'0':0} #colors corresponding to layers
         self.defaultLayer = '0' #default layer to draw chips on
-        self.FRAME_LAYER = kwargs.get('FRAME_LAYER', ['WAFER_FRAME', 8, 1])  # default frame layer
         
         # initialize private variables
         self.chipPts = [] #chip offsets, measring from lower left corner
         self.chipColumns = [] #chip columns
         self.chips = [] #cached chip references
         self.defaultChip = None
-        
         
         
     # for changing wafer properties later
@@ -209,11 +260,9 @@ class Wafer:
             for i in range(len(self.chipPts)):
                 self.chips.append(self.defaultChip)
     
-    def init(self, FRAME_LAYER=None, MARKER_LAYER=['MARKERS',5,-1]):
+    def init(self, FRAME_LAYER=['FRAME',8,-1], MARKER_LAYER=['MARKERS',5,-1]):
         #self.frame and self.markers override presence/absence of FRAME_LAYER/MARKER_LAYER params
         #verify frame is off is multilayer is off
-        if FRAME_LAYER is None:
-            FRAME_LAYER = self.FRAME_LAYER
         self.frame = self.multiLayer and self.frame or 0
         #finish setup of DXF file
         if self.multiLayer:
@@ -277,9 +326,7 @@ class Wafer:
         #setup the viewport
         self.drawing.add_vport('*ACTIVE',ucs_icon=0,circle_zoom=1000,grid_on=1,center_point=(0,0),aspect_ratio=2*(self.waferDiameter))
     
-    def initChipOnly(self,center=False, FRAME_LAYER=None, MARKER_LAYER=['MARKERS',5,-1]):
-        if FRAME_LAYER is None:
-            FRAME_LAYER = self.FRAME_LAYER
+    def initChipOnly(self,center=False, FRAME_LAYER=['FRAME',8,-1], MARKER_LAYER=['MARKERS',5,-1]):
         #self.frame and self.markers override presence/absence of FRAME_LAYER/MARKER_LAYER params
         #initialize drawing assuming we only want to draw a single chip
         #verify frame is off is multilayer is off
@@ -372,15 +419,8 @@ class Wafer:
                 self.drawing.add(dxf.insert('DICINGBORDER',insert=(pt[0],pt[1]),layer=self.lyr(layer)))
                 
     def writeChip(self,chip,index):
-        # #insert a chip at specified index
-        # self.drawing.add(dxf.insert(chip.ID,insert=self.chipSpace(self.chipPts[index]),layer=self.lyr(chip.layer)))
-        # If centerChip, offset so chip center is at chipPts[index]
-        if getattr(self, 'centerChip', False):
-            offset = (self.chipX / 2, self.chipY / 2)
-            insert_pt = (self.chipPts[index][0] - offset[0], self.chipPts[index][1] - offset[1])
-        else:
-            insert_pt = tuple(self.chipPts[index])
-        self.drawing.add(dxf.insert(chip.ID, insert=self.chipSpace(insert_pt), layer=self.lyr(chip.layer)))
+        #insert a chip at specified index
+        self.drawing.add(dxf.insert(chip.ID,insert=self.chipSpace(self.chipPts[index]),layer=self.lyr(chip.layer)))
         
     #write all chips in the chips buffer
     def populate(self):
@@ -392,9 +432,6 @@ class Wafer:
     
     #define high visibility markers as blocks '00' - '09'
     def defineHiVisMarker09(self,width,layer):
-        # deferred import: markerLib imports MaskLib, so a top-level import
-        # here would be circular
-        from maskLib.markerLib import HiVisMarker09
         for i in range(10):
             num = dxf.block('0'+str(i))
             HiVisMarker09(num,0,0,i,width,self.bg(layer))
@@ -477,111 +514,49 @@ class Wafer:
 #       basic class with a blank chip
 # ===============================================================================
         
-import ezdxf
-from ezdxf.addons import text2path
-# NOTE: ezdxf reorganized its font tools in v1.0 and later removed the old path:
-#   old (removed):  from ezdxf.tools.fonts import FontFace
-#   new:            from ezdxf.fonts.fonts import FontFace  (public API)
-# (ezdxf.fonts.font_face.FontFace also works but is the internal module path)
-from ezdxf.fonts.fonts import FontFace
-from maskLib.utilities import snap_to_grid
-
 class Chip:
-    def __init__(self, wafer, chipID, layer, structures=None, defaults=None, FRAME_NAME='703/0', grid_size_small=.005, grid_size_large=.050,centerChip=True):
+    #contains 
+    chipID = '0'
+    width = 0
+    height = 0
+    layer = '0'
+    center = (0,0)
+    structures = [] 
+    #cached chip propoerties
+    solid = 1
+    frame = 1
+    def __init__(self,wafer,chipID,layer,structures=None,defaults=None, FRAME_NAME='FRAME'):
         self.wafer = wafer
         self.width = wafer.chipX - wafer.sawWidth
         self.height = wafer.chipY - wafer.sawWidth
-        self.chipID = chipID  # String (usually)
-        self.centerChip = centerChip
-        self.ID = 'CHIP_' + str(chipID)
+        self.chipID = chipID #string (usually)
+        self.ID = 'CHIP_'+str(chipID)
         self.solid = wafer.solid
         self.frame = wafer.frame
         self.layer = layer
-        
-        self.grid_size_small = grid_size_small  # nm, default 5
-        self.grid_size_large = grid_size_large  # nm, default 100
-
         if defaults is None:
             self.defaults = {}
         else:
             self.defaults = defaults.copy()
-        # Setup centering
-        self.center = (self.width / 2, self.height / 2)
-        # Initialize the block
+        #setup centering
+        self.center = (self.width/2,self.height/2)
+        #initialize the block
         self.chipBlock = dxf.block(self.ID)
         
-        if centerChip:
-            self.origin_offset = (-self.width / 2, -self.height / 2)
-        else:
-            self.origin_offset = (0, 0)
-
-        # Setup structures
+        #setup structures
         if structures is not None:
             self.structures = structures
             
-        # Add a debug frame for actual chip area
+        #add a debug frame for actual chip area
         if wafer.frame:
-            # Frame at (0,0) - self.add() will apply origin_offset for centering
-            self.add(dxf.rectangle((0, 0), self.width, self.height, layer=wafer.lyr(FRAME_NAME)))
-
-    def add_structure(self, structure):
-        self.structures.append(structure)
-
-    def draw(self):
-        for structure in self.structures:
-            structure.draw(self)
-
-    # def add_chip_label(self, text, position, height=10, layer='TEXT'):
-    #     # Define font properties
-    #     font_face = FontFace(family='Arial')
-        
-    #     # Convert text to paths
-    #     paths = text2path.make_paths_from_str(text, font=font_face, size=height)
-    #     for path in paths:
-    #         points = list(path.flattening(0.01))  # Flatten the path to get the points
-    #         self.wafer.drawing.add(dxf.polyline(points, layer=layer))
-    # GOODONEdef add_chip_label(self, text, position, height=10, layer='TEXT'):
-    #     font_face = FontFace(family='Arial')
-    #     paths = text2path.make_paths_from_str(text, font=font_face, size=height)
-    #     for path in paths:
-    #         points = list(path.flattening(0.01))
-    #         self.chipBlock.add(dxf.polyline(points, layer=layer)) # Add to chipBlock instead of wafer.drawing
-    def add_chip_label(self, text, position, height=10, layer='98/0'):
-        font_face = FontFace(family='Arial')
-        paths = text2path.make_paths_from_str(text, font=font_face, size=height)
-        
-        # Calculate the bounding box of the text paths
-        min_x = float('inf')
-        min_y = float('inf')
-        max_x = float('-inf')
-        max_y = float('-inf')
-
-        for path in paths:
-            for point in path.flattening(0.01):
-                min_x = min(min_x, point.x)
-                min_y = min(min_y, point.y)
-                max_x = max(max_x, point.x)
-                max_y = max(max_y, point.y)
-
-        text_width = max_x - min_x
-        text_height = max_y - min_y
-
-        # Calculate the offset to center the text at the position
-        offset_x = position[0] - text_width / 2
-        offset_y = position[1] - text_height / 2
-
-        for path in paths:
-            points = list(path.flattening(0.01))
-            # Apply the offset to each point in the path
-            offset_points = [(point.x + offset_x, point.y + offset_y) for point in points]
-            self.chipBlock.add(dxf.polyline(offset_points, layer=layer, flags=1))
-
-    def save(self, wafer, drawCopyDXF=False, dicingBorder=True, center=False, FRAME_LAYER=['703/0', 8, -1], MARKER_LAYER=['MARKERS', 5, -1]):
+            self.add(dxf.rectangle((0,0),self.width,self.height,layer=wafer.lyr(FRAME_NAME)))
+    
+    def save(self,wafer,drawCopyDXF=False,dicingBorder=True,center=False, FRAME_LAYER=['FRAME',8,-1], MARKER_LAYER=['MARKERS',5,-1]):
         wafer.drawing.blocks.add(self.chipBlock)
         if drawCopyDXF:
-            # Make a copy DXF with only the chip
-            temp_wafer = Wafer(wafer.fileName + '_' + self.ID, wafer.path, 10, 10)
-            # Height and width don't matter since the next line copies all settings
+            #make a copy DXF with only the chip
+            temp_wafer = Wafer(wafer.fileName+'_'+self.ID,wafer.path,10,10)
+            #height and width don't matter since the next line copies all settings
             temp_wafer.copyPropertiesFrom(wafer)
             temp_wafer.drawing.blocks.add(self.chipBlock)
             temp_wafer.initChipOnly(center=center, FRAME_LAYER=FRAME_LAYER, MARKER_LAYER=MARKER_LAYER)
@@ -591,27 +566,14 @@ class Chip:
             temp_wafer.populate()
             temp_wafer.save()
         return self
-
-    def add(self, obj, structure=None, length=None, offsetVector=None, absolutePos=None, angle=0, newDir=None, use_large_grid=True):
-        # Snap points and origin to grid if present
-        gs = self.grid_size_large if use_large_grid else self.grid_size_small
-        if hasattr(obj, 'points') and obj.points is not None:
-            obj.points = [snap_to_grid((pt[0] + self.origin_offset[0], pt[1] + self.origin_offset[1]), gs) for pt in obj.points]
-        if hasattr(obj, 'origin') and obj.origin is not None:
-            obj.origin = snap_to_grid((obj.origin[0] + self.origin_offset[0], obj.origin[1] + self.origin_offset[1]), gs)
+        
+    def add(self,obj,structure=None,length=None,offsetVector=None,absolutePos=None,angle=0,newDir=None):
         self.chipBlock.add(obj)
-        # Snap points and origin if present
-        # gs = self.grid_size_large if use_large_grid else self.grid_size_small
-        # if hasattr(obj, 'points') and obj.points is not None:
-        #     obj.points = [snap_to_grid(pt, gs) for pt in obj.points]
-        # if hasattr(obj, 'origin') and obj.origin is not None:
-        #     obj.origin = snap_to_grid(obj.origin, gs)
-        # self.chipBlock.add(obj)
         def struct():
-            if isinstance(structure, Structure):
+            if isinstance(structure,Structure):
                 return structure
-            elif isinstance(structure, tuple):
-                return Structure(self, structure)
+            elif isinstance(structure,tuple):
+                return Structure(self,structure)
             else:
                 return self.structures[structure]
         if length is not None:
@@ -620,43 +582,162 @@ class Chip:
             struct().translatePos(vector=offsetVector, angle=angle, newDir=newDir)
         elif absolutePos is not None:
             struct().updatePos(newStart=absolutePos, angle=angle, newDir=newDir)
-
-    # Return chip centered coordinates in chip space
-    def centered(self, xy=(0, 0)):
-        return (xy[0] + self.center[0], xy[1] + self.center[1])
-
-    # Return chip centered x coordinate in chip space
-    def cx(self, x):
+        
+    #return chip centered coordinates in chip space
+    def centered(self,xy=(0,0)):
+        return (xy[0]+self.center[0],xy[1]+self.center[1])
+    
+    #return chip centered x coordinate in chip space
+    def cx(self,x):
         return self.center[0] + x
-
-    # Return chip centered y coordinate in chip space
-    def cy(self, y):
+    
+    #return chip centered y coordinate in chip space
+    def cy(self,y):
         return self.center[1] + y
-
-    # Chip space:
-    # Coordinates centered on corner of actual chip
-    def chipSpace(self, xy):
-        return (xy[0] + self.wafer.sawWidth / 2, xy[1] + self.wafer.sawWidth / 2)
-
-    # Get structure by index
-    def structure(self, i):
+    
+    #chip space:
+    #coordinates centered on corner of actual chip
+    def chipSpace(self,xy):
+        return (xy[0]+self.wafer.sawWidth/2,xy[1]+self.wafer.sawWidth/2)
+    
+    #get structure by index
+    def structure(self,i):
         return self.structures[i]
-
-    # Get structure start by index
-    def getStart(self, i):
+    
+    #get structure start by index
+    def getStart(self,i):
         return self.structures[i].start
-
-    # Get structure direction by index
-    def getDir(self, i):
+    
+    #get structure direction by index
+    def getDir(self,i):
         return self.structures[i].direction
-
-    # Get background color from layer
-    def bg(self, layerName=None):
+    
+    #get background color from layer
+    def bg(self,layerName=None):
         return self.wafer.bg(layerName)
-
-    # Get layer from wafer 
-    def lyr(self, layerName):
+    
+    #get layer from wafer 
+    def lyr(self,layerName):
         return self.wafer.lyr(layerName)
+    
+    #chip labeling using text conversion via ezdxf
+    
+    # def add_chip_label(self, label, pos, height=0.7, layer='0'):
+    #     # --- Part 1: Create Exploded Text in ezdxf ---
+    #     ezdoc = ezdxf.new("R2010")
+    #     ezmsp = ezdoc.modelspace()
+    #     text = ezmsp.add_text("Exploded", dxfattribs={"height": 0.7})
+    #     proxy = text.proxy
+    #     geometries = list(proxy.explode_into_acis())
+    #     ezmsp.delete_entity(text)
+    #     for geometry in geometries:
+    #         geometry.add_to_layout(ezmsp)
+
+    #     ezdoc.saveas("temp.dxf")
+
+    #     # --- Part 2: Import into dxfwrite ---
+    #     dwg = engine.drawing("output.dxf")  # Your existing dxfwrite drawing
+    #     temp = ezdxf.readfile("temp.dxf")
+    #     temp_msp = temp.modelspace()
+
+    #     # very basic mapping, does only support LINE and ARC entities
+    #     for entity in temp_msp:
+    #         if entity.dxftype() == "LINE":
+    #             start_point = entity.dxf.start
+    #             end_point = entity.dxf.end
+    #             dwg.add(
+    #                 engine.line(
+    #                     start=(start_point.x, start_point.y),
+    #                     end=(end_point.x, end_point.y),
+    #                 )
+    #             )
+    #         elif entity.dxftype() == "ARC":
+    #             center = entity.dxf.center
+    #             radius = entity.dxf.radius
+    #             start_angle = entity.dxf.start_angle
+    #             end_angle = entity.dxf.end_angle
+    #             dwg.add(
+    #                 engine.arc(
+    #                     radius=radius,
+    #                     center=(center.x, center.y),
+    #                     startangle=start_angle,
+    #                     endangle=end_angle,
+    #                 )
+    #             )
+    #     #dwg.save()
+    #     os.remove("temp.dxf")
+    def add_chip_label(
+        dwg,  # Your dxfwrite drawing object
+        text,  # The text string you want to add
+        insert_point,  # Insertion point as a tuple (x, y)
+        height=0.7,  # Text height (optional, default 0.7)
+        rotation=0,  # Text rotation in degrees (optional, default 0)
+        temp_filename="temp.dxf",  # Temporary file name (optional)
+    ):
+        """Adds a chip label (exploded text) to a dxfwrite drawing.
+
+        Args:
+            dwg: The dxfwrite drawing object.
+            text: The text string.
+            insert_point: Insertion point (x, y).
+            height: Text height (optional).
+            rotation: Text rotation in degrees (optional).
+            temp_filename: Temporary file name (optional).
+        """
+
+        # --- Part 1: Create Exploded Text in ezdxf ---
+        ezdoc = ezdxf.new("R2010")
+        ezmsp = ezdoc.modelspace()
+        # use insert and rotation
+        text_entity = ezmsp.add_text(
+            text,
+            dxfattribs={
+                "height": height,
+                "rotation": rotation,
+            },
+        )
+        text_entity.set_pos(insert_point)
+
+        proxy = text_entity.proxy
+        geometries = list(proxy.explode_into_acis())
+        ezmsp.delete_entity(text_entity)
+        for geometry in geometries:
+            geometry.add_to_layout(ezmsp)
+        ezdoc.saveas(temp_filename)
+
+        # --- Part 2: Import into dxfwrite ---
+        temp = ezdxf.readfile(temp_filename)
+        temp_msp = temp.modelspace()
+
+        for entity in temp_msp:
+            if entity.dxftype() == "LINE":
+                start_point = entity.dxf.start
+                end_point = entity.dxf.end
+                dwg.add(
+                    engine.line(
+                        start=(start_point.x, start_point.y),
+                        end=(end_point.x, end_point.y),
+                        # Add layer, color, etc. if needed
+                    )
+                )
+            elif entity.dxftype() == "ARC":
+                center = entity.dxf.center
+                radius = entity.dxf.radius
+                start_angle = entity.dxf.start_angle
+                end_angle = entity.dxf.end_angle
+                dwg.add(
+                    engine.arc(
+                        radius=radius,
+                        center=(center.x, center.y),
+                        startangle=start_angle,
+                        endangle=end_angle,
+                        # Add layer, color, etc. if needed
+                    )
+                )
+            # Add handling for other entity types here if needed...
+
+        # --- Clean up temporary file ---
+        os.remove(temp_filename)
 
 # ===============================================================================
 #  STRUCTURE CLASS  
@@ -916,3 +997,4 @@ class ChipLL_20port(Chip):
 # ===============================================================================
 #  END CLASS DEFINITIONS   
 # ===============================================================================
+

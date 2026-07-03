@@ -5,7 +5,6 @@ Created on Mon Oct  7 10:09:40 2019
 @author: slab
 """
 import math
-import numpy as np
 
 from dxfwrite.mixins import SubscriptAttributes
 from dxfwrite import const
@@ -14,8 +13,8 @@ from dxfwrite.base import DXFList,dxfstr
 from dxfwrite.entities import Polyline, Solid
 from dxfwrite.vector2d import vadd, vsub
 
-
 from maskLib.utilities import cornerRound
+from maskLib.point_logger import log_points
 
 class SolidPline(SubscriptAttributes):
     ''' Shape consisting of a Polyline and solid background** if polyline has 4 points or less
@@ -66,6 +65,7 @@ class SolidPline(SubscriptAttributes):
         
     def _build_polyline(self):
         '''Build the polyline (key component)'''
+        log_points(self.transformed_points)
         polyline = Polyline(self.transformed_points, color=self.color, layer=self.layer,flags=0)
         polyline.close() #redundant in most cases
         if self.linetype is not None:
@@ -455,160 +455,10 @@ class InsideCurve(SubscriptAttributes):
         return dxfstr(self.__dxftags__())
     
     def __dxftags__(self):
-        return self._build() 
-    
-
-class Star(SolidPline, InsideCurve):
-    ''' Six branch star shape consisting of a single Polyline and a number of background solids
-    '''
-    name = 'STAR'
-
-    def __init__(self, insert, widths, heights, offset, roundCorners=[1,1,1,1,1,1],
-            halign=const.LEFT, valign=const.BOTTOM,
-            hflip=False, vflip = False,ptDensity=120,**kwargs):
-        
-
-        if len(widths) == 1 or len(heights) == 1:
-
-            widths *= 6
-            heights *= 6
-        
-        
-        self.widths = [abs(float(width)) for width in widths]
-        self.heights = [abs(float(height)) for height in heights]
-        self.halign = halign
-        self.valign = valign
-        self.hflip = hflip
-        self.vflip = vflip
-        
-        #boolean array with corresponding to which corners to round
-        self.roundCorners=roundCorners
-        self.ptDensity = ptDensity
-        
-        
-        # SolidPline.__init__(self,insert,points=self._calc_corners(offset,newLength,edge), **kwargs)
-        pts = self._calc_corners()
-        SolidPline.__init__(self,insert,points=pts, **kwargs)            
-    def _calc_corners(self):
-
-        pts = []
-        cl = np.cos(np.pi/6)
-        sl = np.sin(np.pi/6)
-
-        cw = np.cos(np.pi/3)
-        sw = np.sin(np.pi/3)
-
-        pts += [([0,0])]                                                                  #0
-        if self.heights[0] > 0:
-            pts += [([pts[-1][0], pts[-1][1] + self.heights[0]])]                             #1
-            pts += [([pts[-1][0] + self.widths[0], pts[-1][1]])]                              #2           
-            pts += [([pts[-1][0], pts[-1][1] - self.heights[0]])]                             #3
-        else:
-            pts += [([pts[-1][0] + + self.widths[0], pts[-1][1] ])]                           #3
-
-        if self.heights[1] >0:
-            pts += [([pts[-1][0] + cl*self.heights[1], pts[-1][1]+ sl*self.heights[1]])]        #4
-            pts += [([pts[-1][0] + cw*self.widths[1], pts[-1][1] - sw*self.widths[1]])]         #5
-            pts += [([pts[-1][0] - cl*self.heights[1], pts[-1][1] - sl*self.heights[1]])]       #6
-        else:
-            pts += [([pts[-1][0] + cw*self.widths[1], pts[-1][1] - sw*self.widths[1]])]        #6
-        
-        if self.heights[2] >0:
-            pts += [([pts[-1][0] + cl*self.heights[2], pts[-1][1] - sl*self.heights[2]])]       #7
-            pts += [([pts[-1][0] - cw*self.widths[2], pts[-1][1] - sw*self.widths[2]])]         #8
-            pts += [([pts[-1][0] - cl*self.heights[2], pts[-1][1] + sl*self.heights[2]])]       #9
-        else:
-            pts += [([pts[-1][0] - cw*self.widths[2], pts[-1][1] - sw*self.widths[2]])]       #9
-        
-        if self.heights[3]>0:
-            pts += [([pts[-1][0], pts[-1][1] - self.heights[3]])]                             #10
-            pts += [([pts[-1][0] - self.widths[3], pts[-1][1]])]                              #11
-            pts += [([pts[-1][0], pts[-1][1] + self.heights[3]])]                             #12
-        else:
-            pts += [([pts[-1][0] - self.widths[3], pts[-1][1]])]                             #12
-    
-        if self.heights[4]>0:
-            pts += [([pts[-1][0] - cl*self.heights[4], pts[-1][1] - sl*self.heights[4]])]       #13
-            pts += [([pts[-1][0] - cw*self.widths[4], pts[-1][1] + sw*self.widths[4]])]         #14
-            pts += [([pts[-1][0] + cl*self.heights[4], pts[-1][1] + sl*self.heights[4]])]       #15
-        else:
-            pts += [([pts[-1][0] - cw*self.widths[4], pts[-1][1] + sw*self.widths[4]])]
-
-        if self.heights[5]>0:
-            pts += [([pts[-1][0] - cl*self.heights[5], pts[-1][1] + sl*self.heights[5]])]       #16
-            pts += [([pts[-1][0] + cw*self.widths[5], pts[-1][1] + sw*self.widths[5]])]         #17
-        
-        return pts
-    
-    def _get_align_vector(self):
-        #note: alignment is done to the parent rectangle, not the skewed side
-        if self.halign == const.CENTER:
-            dx = -self.width/2.
-        elif self.halign == const.RIGHT:
-            dx = -self.width
-        else:  # const.LEFT
-            dx = 0.
-
-        #note: vertical alignment is flipped from regular rectangle
-        if self.valign == const.MIDDLE:
-            dy = -self.height/2.
-        elif self.valign == const.TOP:
-            dy = -self.height
-        else:  # const.BOTTOM
-            dy = 0.
-
-        return (dx, dy)
-    
-    def _get_offset(self,delta):
-        #labelled like vertical offset, but can technically be applied to any 
-        if self.ealign == const.TOP:
-            dy = -delta
-        elif self.ealign == const.BOTTOM:
-            dy = delta
-        else:  # const.MIDDLE
-            dy = 0.
-
-        return dy
+        return self._build()
 
 
-class DogBone(SolidPline):
-    name = 'DOGBONE'
-    def __init__(self, insert,
-                 xvr_width,
-                 xvr_length,
-                 rr_width,
-                 rr_length,
-                 rr_br_gap,
-                 delta_left,
-                 delta_right,
-                 **kwargs):
-        self.xvr_width = xvr_width
-        self.xvr_length = xvr_length
-        self.rr_width = rr_width
-        self.rr_length = rr_length
-        self.rr_br_gap = rr_br_gap
-        self.delta_left = delta_left
-        self.delta_right = delta_right
-        SolidPline.__init__(self,insert,points=self._calc_corners(), **kwargs)
-        
-    def _calc_corners(self):
-        pts = []
 
-        pts.append((self.xvr_width/2, self.xvr_length/2))
-        pts.append((self.rr_width/2 + self.rr_br_gap, self.xvr_length/2))
-        pts.append((self.rr_width/2 + self.rr_br_gap, self.xvr_length/2 + self.rr_length + 2*self.rr_br_gap))
 
-        for pt in pts[2::-1]: # iterate from 2, 1, 0
-            pts.append((-pt[0], pt[1]))
 
-        for pt in pts[5::-1]: # iterate from 5, 4, 3, 2, 1, 0
-            pts.append((pt[0], -pt[1]))
 
-        for pt in pts[:6]: # add delta_left to account for airbridge on cpw bends
-            pt[1] + self.delta_left
-
-        for pt in pts[6:]: # add delta_left to account for airbridge on cpw bends
-            pt[1] - self.delta_right
-        
-        return pts
-    
