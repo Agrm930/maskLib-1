@@ -294,7 +294,7 @@ def Strip_taper(chip,structure,length=None,w0=None,w1=None,bgcolor=None,offset=(
     if length is None:
         length = math.sqrt(3)*abs(w0/2-w1/2)
     
-    chip.add(SkewRect(struct().start,length,w0,offset,w1,rotation=struct().direction,valign=const.MIDDLE,edgeAlign=const.MIDDLE,bgcolor=bgcolor,**kwargs),structure=structure,offsetVector=vadd((length,0),offset))
+    chip.add(SkewRect(_originCompensatedInsert(chip, struct().start, struct().direction),length,w0,offset,w1,rotation=struct().direction,valign=const.MIDDLE,edgeAlign=const.MIDDLE,bgcolor=bgcolor,**kwargs),structure=structure,offsetVector=vadd((length,0),offset))
 
 def Strip_bend(chip,structure,angle=90,CCW=True,w=None,radius=None,ptDensity=120,bgcolor=None,**kwargs):
     def struct():
@@ -1607,3 +1607,756 @@ def CPW_bridge(chip, structure, xvr_length=None, w=None, s=None, lincolnLabs=Fal
     CPW_taper(chip, s_right, length=rr_length + 2*rr_br_gap, w0=rr_width + 2*rr_br_gap, s0=s, w1=w, s1=s, **kwargs)
 
     return s_left, s_right
+
+# ===============================================================================
+# CPS (coplanar stripline) function definitions — ported from personal work in
+# the chakramlab/maskLib clone (uncommitted there), for use in Fast_Flux designs
+# ===============================================================================
+def Double_Y_balun(chip, structure, arm_length=500, w=2, s=100, cpw_s=2, cpw_w=2, gnd_width=50, rotation=0, bgcolor=None, **kwargs):
+
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+
+    center = struct().start
+    base_direction = struct().direction + rotation
+
+    def offset_start(angle_deg, offset):
+        angle_rad = math.radians(angle_deg)
+        return (center[0] + offset * math.cos(angle_rad),
+                center[1] + offset * math.sin(angle_rad))
+
+    gap_offset = w / 2
+
+    # CPS port 1: arms at +30° (open end) and +150° (short end)
+    cps1_end   = m.Structure(chip, offset_start(base_direction + 30,  gap_offset), direction=base_direction + 30)
+    cps1_short = m.Structure(chip, offset_start(base_direction + 150, gap_offset), direction=base_direction + 150)
+    CPS_straight(chip, cps1_end,   arm_length, w=w, s=s)
+    CPS_straight(chip, cps1_short, arm_length, w=w, s=s)
+
+    # CPW port: arms at -30° and -150° — drawn as positive metal
+    cpw1_end   = m.Structure(chip, offset_start(base_direction - 30,  gap_offset), direction=base_direction - 30)
+    cpw1_short = m.Structure(chip, offset_start(base_direction - 150, gap_offset), direction=base_direction - 150)
+    CPW_straight_pos(chip, cpw1_end,   arm_length, w=cpw_s, s=cpw_w, gnd_width=gnd_width)
+    CPW_straight_pos(chip, cpw1_short, arm_length, w=cpw_s, s=cpw_w, gnd_width=gnd_width)
+
+    # CPW in arm at +90° and CPS out arm at -90°
+    cpw_in  = m.Structure(chip, offset_start(base_direction + 90, gap_offset), direction=base_direction + 90)
+    cps_out = m.Structure(chip, offset_start(base_direction - 90, gap_offset), direction=base_direction - 90)
+    CPW_straight_pos(chip, cpw_in,  arm_length, w=cpw_s, s=cpw_w, gnd_width=gnd_width)
+    CPS_straight(chip, cps_out, arm_length, w=w, s=s)
+
+    # CPS Short bridge at tip of cps1_short arm
+    tip = offset_start(base_direction + 150, gap_offset + arm_length)
+    chip.add(dxf.rectangle(
+        tip, s, w + 2*s,
+        valign=const.MIDDLE,
+        rotation=base_direction + 150,
+        bgcolor=bgcolor,
+        **kwargStrip(kwargs)))
+
+
+def CPS_structure(chip, start, direction=0, w=6, strip=10, radius=100):
+
+    s = m.Structure(chip, start, direction)
+
+    s.defaults['w'] = w
+    s.defaults['s'] = strip
+    s.defaults['radius'] = radius
+    return s
+def CPS_straight(chip, structure, length, w=None, s=None, bgcolor=None, **kwargs):
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w is None:
+        try:
+            w = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+    if s is None:
+        try:
+            s = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+
+    # Draw two metal strips of width s, separated by gap w
+    # In CPW, rectangles were drawn at ±w/2 outward (the gaps)
+    # In CPS, we draw the conductors at ±w/2 inward (the strips)
+    chip.add(dxf.rectangle(struct().getPos((0, -w/2)), length, -s,
+             rotation=struct().direction, bgcolor=bgcolor, **kwargStrip(kwargs)))
+    chip.add(dxf.rectangle(struct().getPos((0,  w/2)), length,  s,
+             rotation=struct().direction, bgcolor=bgcolor, **kwargStrip(kwargs)),
+             structure=structure, length=length)
+
+    return struct().getPos()
+
+
+def CPS_bend(chip, structure, angle=90, CCW=True, w=None, s=None, radius=None,
+             ptDensity=120, bgcolor=None, **kwargs):
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+    if w is None:
+        try:
+            w = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID)
+    if s is None:
+        try:
+            s = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID)
+    if radius is None:
+        try:
+            radius = struct().defaults['radius']
+        except KeyError:
+            print('\x1b[33mradius not defined in ', chip.chipID, '!\x1b[0m')
+            return
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+
+    while angle < 0:
+        angle = angle + 360
+    angle = angle % 360
+    angleRadians = math.radians(angle)
+
+    # Mirror of CPW_bend: CurveRects are drawn at ±w/2 as the metal strips
+    # roffset places the inner edge of each strip at the gap boundary (±w/2)
+    # ralign=BOTTOM grows outward from the gap edge, matching CPW strip geometry
+    chip.add(CurveRect(struct().start, s, radius, angle=angle, ptDensity=ptDensity,
+             roffset=w/2,  ralign=const.BOTTOM,
+             rotation=struct().direction, vflip=not CCW, bgcolor=bgcolor, **kwargs))
+    chip.add(CurveRect(struct().start, s, radius, angle=angle, ptDensity=ptDensity,
+             roffset=-w/2, ralign=const.TOP, valign=const.TOP,
+             rotation=struct().direction, vflip=not CCW, bgcolor=bgcolor, **kwargs))
+
+    struct().updatePos(
+        newStart=struct().getPos((
+            radius * math.sin(angleRadians),
+            (CCW and 1 or -1) * radius * (math.cos(angleRadians) - 1)
+        )),
+        angle=CCW and -angle or angle
+    )
+
+def _originCompensatedInsert(chip, insert, rotation_deg):
+    ''' Chip.add() shifts the .points of eager SolidPline-based shapes (SkewRect, RoundRect,
+    Star, ...) by chip.origin_offset while they're still in their local, pre-rotation frame -
+    that shift then gets rotated along with the rest of the shape's points, instead of applying
+    untransformed to the insert point like it would for a plain dxf.rectangle. Pre-correct the
+    insert point here so the shape ends up where callers actually asked for it. '''
+    r_oo = rotate_2d(chip.origin_offset, math.radians(rotation_deg))
+    return (insert[0] - r_oo[0], insert[1] - r_oo[1])
+
+def CPS_taper(chip, structure, length=None, w0=None, s0=None, w1=None, s1=None, bgcolor=None, offset=(0,0), **kwargs):
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w0 is None:
+        try:
+            w0 = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+    if s0 is None:
+        try:
+            s0 = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+    if w1 is None:
+        try:
+            w1 = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+    if s1 is None:
+        try:
+            s1 = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+
+    # If undefined, make outer angle 30 degrees (matching CPW convention)
+    # In CPS the outer edge is at w/2 + s, same as CPW, so formula is identical
+    if length is None:
+        length = math.sqrt(3) * abs(w0/2 + s0 - w1/2 - s1)
+
+    # Lower strip: starts at -w0/2 (inner edge), grows downward by s0
+    # skews so inner edge tracks -w1/2 at the far end
+    chip.add(SkewRect(_originCompensatedInsert(chip, struct().getPos((0, -w0/2)), struct().direction), length, s0,
+             (offset[0], w0/2 - w1/2 + offset[1]), s1,
+             rotation=struct().direction, valign=const.TOP, edgeAlign=const.TOP,
+             bgcolor=bgcolor, **kwargs))
+    # Upper strip: starts at +w0/2 (inner edge), grows upward by s0
+    # skews so inner edge tracks +w1/2 at the far end
+    chip.add(SkewRect(_originCompensatedInsert(chip, struct().getPos((0,  w0/2)), struct().direction), length, s0,
+             (offset[0], w1/2 - w0/2 + offset[1]), s1,
+             rotation=struct().direction, valign=const.BOTTOM, edgeAlign=const.BOTTOM,
+             bgcolor=bgcolor, **kwargs), structure=structure, offsetVector=(length + offset[0], offset[1]))
+
+def CPS_circular_taper(chip, structure, length=None, w0=None, s0=None, w1=None, s1=None,
+                        ptDensity=60, bgcolor=None, **kwargs):
+    """
+    CPS taper where the strip width follows a concave circular profile,
+    pinching inward (narrowest at the midpoint) between s0 and s1.
+
+    Parameters
+    ----------
+    length    : total length of the taper
+    w0, w1    : gap width at start and end (usually kept equal for CPS)
+    s0, s1    : strip width at start and end
+    ptDensity : number of segments to approximate the curve
+    """
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w0 is None:
+        try:
+            w0 = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+    if s0 is None:
+        try:
+            s0 = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+    if w1 is None:
+        w1 = w0
+    if s1 is None:
+        s1 = s0
+    if length is None:
+        length = math.sqrt(3) * abs(w0/2 + s0 - w1/2 - s1)
+
+    # Build circular concave profile for strip width along the taper.
+    # The profile is a circular arc that passes through s0 at x=0,
+    # dips to a minimum at x=length/2, and returns to s1 at x=length.
+    #
+    # We define the circular arc by fitting a circle through:
+    #   (0, s0), (length/2, s_mid), (length, s1)
+    # where s_mid is the minimum strip width (narrowest point).
+    # s_mid is derived from the geometry of the circle passing through
+    # the endpoints, giving a natural concave curve.
+    #
+    # For simplicity we use a cosine-approximated circular profile:
+    #   s(x) = s_avg - (s_amp)*cos(pi*x/length)
+    # where s_avg and s_amp are chosen to match s0 and s1 at endpoints.
+
+    n = ptDensity
+    seg_length = length / n
+
+    for i in range(n):
+        x0 = i * seg_length
+        x1 = (i + 1) * seg_length
+
+        # Normalized positions [0,1]
+        t0 = x0 / length
+        t1 = x1 / length
+
+        # Concave circular profile using sine:
+        # width is s0/s1 at ends, dips to minimum at midpoint
+        # sin(pi*t) is 0 at ends, 1 at midpoint — invert for concave
+        s_at_t0 = s0 + (s1 - s0) * t0 - min(s0, s1) * math.sin(math.pi * t0)
+        s_at_t1 = s0 + (s1 - s0) * t1 - min(s0, s1) * math.sin(math.pi * t1)
+
+        # Gap interpolated linearly
+        w_at_t0 = w0 + (w1 - w0) * t0
+        w_at_t1 = w0 + (w1 - w0) * t1
+
+        # Draw bottom strip segment: inner edge at -w/2, grows downward
+        chip.add(SkewRect(
+            _originCompensatedInsert(chip, struct().getPos((x0, -w_at_t0/2)), struct().direction), seg_length, s_at_t0,
+            (0, w_at_t0/2 - w_at_t1/2), s_at_t1,
+            rotation=struct().direction, valign=const.TOP, edgeAlign=const.TOP,
+            bgcolor=bgcolor, **kwargs))
+
+        # Draw top strip segment: inner edge at +w/2, grows upward
+        chip.add(SkewRect(
+            _originCompensatedInsert(chip, struct().getPos((x0,  w_at_t0/2)), struct().direction), seg_length, s_at_t0,
+            (0, w_at_t1/2 - w_at_t0/2), s_at_t1,
+            rotation=struct().direction, valign=const.BOTTOM, edgeAlign=const.BOTTOM,
+            bgcolor=bgcolor, **kwargs))
+
+    # Advance structure by full length
+    struct().updatePos(newStart=struct().getPos((length, 0)), angle=0)
+
+def CPS_capPad(chip, structure, pad_length, pad_width, w=None, bgcolor=None, **kwargs):
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w is None:
+        try:
+            w = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+            return
+
+    # Lower pad: inner edge at -w/2, grows downward by pad_width
+    chip.add(dxf.rectangle(struct().getPos((0, -w/2)), pad_length, -pad_width,
+             rotation=struct().direction, bgcolor=bgcolor, **kwargStrip(kwargs)))
+    # Upper pad: inner edge at +w/2, grows upward by pad_width
+    chip.add(dxf.rectangle(struct().getPos((0,  w/2)), pad_length,  pad_width,
+             rotation=struct().direction, bgcolor=bgcolor, **kwargStrip(kwargs)),
+             structure=structure, length=pad_length)
+
+
+def CPS_hairpin_filter(chip, structure, resonators, bgcolor=None, **kwargs):
+    """
+    Draws a 7th order (or arbitrary order) CPS hairpin filter.
+    Starts and ends with a capacitive pad.
+
+    Parameters
+    ----------
+    resonators : list of dicts, each with keys:
+        'straight1'  : length of the first straight section (default 1000)
+        'straight2'  : length of the hairpin straight section (default 2200)
+        'straight3'  : length of the last straight section (default 1000)
+        'taper_in'   : (length, w0, s0, w1, s1) for input taper
+        'pad_length' : length of capacitive pad
+        'pad_width'  : width of capacitive pad
+        'taper_out'  : (length, w0, s0, w1, s1) for output taper
+    """
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    for i, res in enumerate(resonators):
+
+
+        straight1 = res.get('straight1', 1500)
+        straight2 = res.get('straight2', 3200)
+        straight3 = res.get('straight3', 1500)
+
+        taper_in  = res.get('taper_in',  (50, 6, 10, 6, 70))
+        taper_out = res.get('taper_out', (50, 6, 70, 6, 10))
+
+        pad_length = res.get('pad_length', 2000)
+        pad_width  = res.get('pad_width',  2000)
+
+        # Leading capacitive pad
+        CPS_circular_taper(chip, structure, *taper_in)
+        CPS_capPad(chip, structure, pad_length, pad_width)
+        CPS_circular_taper(chip, structure, *taper_out)
+
+        # Hairpin shape
+        CPS_bend(chip, structure, angle=90,  CCW=False)
+        CPS_straight(chip, structure, length=straight1)
+        CPS_bend(chip, structure, angle=180)
+        CPS_straight(chip, structure, length=straight2)
+        CPS_bend(chip, structure, angle=180, CCW=False)
+        CPS_straight(chip, structure, length=straight3)
+        CPS_bend(chip, structure, angle=90)
+
+    # Trailing capacitive pad after the last resonator
+    last = resonators[-1]
+    taper_in  = last.get('taper_in',  (50, 6, 10, 6, 70))
+    taper_out = last.get('taper_out', (50, 6, 70, 6, 10))
+    pad_length = last.get('pad_length', 2000)
+    pad_width  = last.get('pad_width',  2000)
+
+    CPS_circular_taper(chip, structure, *taper_in)
+    CPS_capPad(chip, structure, pad_length, pad_width)
+    CPS_circular_taper(chip, structure, *taper_out)
+
+
+def CPS_patch_filter(chip, structure, resonators, bgcolor=None, **kwargs):
+    """
+    Edge-coupled (combline-style) CPS bandpass filter: a chain of rectangular
+    resonator patches connected end-to-end by short narrow tabs, instead of
+    CPS_hairpin_filter's single continuously-meandering line. Each patch acts
+    as its own resonator, coupled to its neighbors mainly through proximity/
+    fringing fields at the tab junctions rather than a long shared conductor -
+    matching the stacked-patch filter topology in arXiv:2503.13953 Fig. 10(a,d).
+
+    Parameters
+    ----------
+    resonators : list of dicts, each with keys:
+        'patch_length'     : length of the resonator patch along the line (default 2000)
+        'patch_width'       : CPS strip width of the patch (default 2000)
+        'gap'               : CPS gap width for both the patch and its connector
+                              (defaults to structure's 'w' default)
+        'connector_length'  : length of the narrow tab to the *next* patch (default 50)
+        'connector_width'   : CPS strip width of that connecting tab
+                              (defaults to structure's 's' default)
+    The last resonator's connector_length/connector_width are ignored (no trailing tab).
+    """
+    for i, res in enumerate(resonators):
+        patch_length = res.get('patch_length', 2000)
+        patch_width  = res.get('patch_width', 2000)
+        gap = res.get('gap', None)
+
+        CPS_capPad(chip, structure, patch_length, patch_width, w=gap, bgcolor=bgcolor, **kwargs)
+
+        if i < len(resonators) - 1:
+            connector_length = res.get('connector_length', 50)
+            connector_width  = res.get('connector_width', None)
+            CPS_straight(chip, structure, connector_length, w=gap, s=connector_width, bgcolor=bgcolor, **kwargs)
+
+
+def CPS_loop(chip, structure, loop_width=None, loop_height=None, w=None, s=None, radius=None, bgcolor=None, **kwargs):
+    """
+    Splits a CPS line into two symmetric striplines that form a rectangular
+    loop and merge back into a single CPS line at the far end.
+
+    Parameters
+    ----------
+    loop_width  : total width of the loop (distance between the two parallel
+                  long sides). Defaults to 500.
+    loop_height : length of the long sides of the loop. Defaults to 2000.
+    w           : gap between striplines (from defaults['w'])
+    s           : strip width (from defaults['s'])
+    radius      : bend radius (from defaults['radius'])
+    """
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w is None:
+        try:
+            w = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+            return
+    if s is None:
+        try:
+            s = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+            return
+    if radius is None:
+        try:
+            radius = struct().defaults['radius']
+        except KeyError:
+            print('\x1b[33mradius not defined in ', chip.chipID, '!\x1b[0m')
+            return
+    if loop_width is None:
+        loop_width = 500
+    if loop_height is None:
+        loop_height = 2000
+
+    # The two strips need to diverge by loop_width/2 each side.
+    # Account for the radius so the straight sections meet cleanly.
+    # Each strip travels: out 90°, straight loop_height, back 90°,
+    # straight loop_width - 2*radius, back 90°, straight loop_height,
+    # back 90° to merge.
+
+    # We use two independent structures cloned from the current position,
+    # one for each strip, then advance the original structure to the end point.
+
+    top_struct    = struct().clone()
+    bottom_struct = struct().clone()
+
+    top_struct.translatePos(vector=(0,  -(w/2 + s/2)))
+    bottom_struct.translatePos(vector=(0,  w/2 + s/2))
+
+    #top_struct.shiftPos(0, newDir=-90)
+   # bottom_struct.shiftPos(0, newDir=-90)
+    # --- Top strip (CCW=True, bends upward) ---
+    # Each clone only draws one of the two rectangles per CPS call,
+    # so we use Strip_ functions for individual line drawing.
+
+    # Diverge outward
+    Strip_bend(chip, top_struct,    angle=90, CCW=True,  w=s, radius=radius)
+    Strip_bend(chip, bottom_struct, angle=90, CCW=False, w=s, radius=radius)
+
+    # Long sides
+    Strip_straight(chip, top_struct,    length=loop_height, w=s)
+    Strip_straight(chip, bottom_struct, length=loop_height, w=s)
+
+    # Turn back inward
+    Strip_bend(chip, top_struct,    angle=90, CCW=False, w=s, radius=radius)
+    Strip_bend(chip, bottom_struct, angle=90, CCW=True,  w=s, radius=radius)
+
+    # Short closing side (loop_width - 2*radius on each strip's path)
+    closing_length = loop_width - 2 * radius
+    if closing_length > 0:
+        Strip_straight(chip, top_struct,    length=closing_length, w=s)
+        Strip_straight(chip, bottom_struct, length=closing_length, w=s)
+
+    # Turn to face back toward original direction
+    Strip_bend(chip, top_struct,    angle=90, CCW=False, w=s, radius=radius)
+    Strip_bend(chip, bottom_struct, angle=90, CCW=True,  w=s, radius=radius)
+
+    # Long sides back
+    Strip_straight(chip, top_struct,    length=loop_height+radius+w/2+s/2, w=s)
+    Strip_straight(chip, bottom_struct, length=loop_height+radius+w/2+s/2, w=s)
+
+
+    # Advance the main structure to the end of the loop
+    # Total forward advance = loop_width (the two 90° diverge/merge pairs
+    # each consume one radius, and the closing straight is loop_width - 2*radius)
+    struct().updatePos(newStart=struct().getPos((loop_width, 0)), angle=0)
+
+#Positive CPW Functions
+
+
+def CPW_straight_pos(chip, structure, length, w=None, s=None, gnd_width=None, bgcolor=None, **kwargs):
+    """
+    Positive CPW straight — draws metal directly instead of gaps.
+
+    Parameters
+    ----------
+    length    : length of the CPW section
+    w         : center strip width
+    s         : gap width between center strip and ground plane
+    gnd_width : how far the ground plane extends past the gap edge
+    """
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w is None:
+        try:
+            w = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+            return
+    if s is None:
+        try:
+            s = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+            return
+    if gnd_width is None:
+        try:
+            gnd_width = struct().defaults['gnd_width']
+        except KeyError:
+            print('\x1b[33mgnd_width not defined in ', chip.chipID, '!\x1b[0m')
+            return
+
+    # Center strip
+    chip.add(dxf.rectangle(struct().getPos((0, -w/2)), length,  w,
+             rotation=struct().direction, bgcolor=bgcolor, **kwargStrip(kwargs)))
+
+    # Left ground plane: starts at outer edge of left gap (w/2 + s), extends by gnd_width
+    chip.add(dxf.rectangle(struct().getPos((0,  w/2 + s)), length,  gnd_width,
+             rotation=struct().direction, bgcolor=bgcolor, **kwargStrip(kwargs)))
+
+    # Right ground plane: starts at outer edge of right gap (w/2 + s), extends by gnd_width
+    chip.add(dxf.rectangle(struct().getPos((0, -w/2 - s)), length, -gnd_width,
+             rotation=struct().direction, bgcolor=bgcolor, **kwargStrip(kwargs)),
+             structure=structure, length=length)
+
+
+
+def CPW_stub_open_pos(chip, structure, length=0, r_out=None, r_ins=None, w=None, s=None,
+                      gnd_width=None, flipped=False, bgcolor=None, **kwargs):
+    """
+    Positive CPW stub open — draws metal directly instead of gaps.
+    Draws center strip + two ground planes with rounded ends.
+    """
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if w is None:
+        try:
+            w = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+    if s is None:
+        try:
+            s = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+    if length == 0:
+        length = max(length, s)
+    if r_out is None:
+        try:
+            r_out = struct().defaults['r_out']
+        except KeyError:
+            r_out = 0
+    if r_ins is None:
+        try:
+            r_ins = struct().defaults['r_ins']
+        except KeyError:
+            r_ins = 0
+    if gnd_width is None:
+        try:
+            gnd_width = struct().defaults['gnd_width']
+        except KeyError:
+            gnd_width = s  # default to gap width if not specified
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+
+    dx = 0.
+    if flipped:
+        dx = length
+
+    # Center strip
+    chip.add(RoundRect(
+        _originCompensatedInsert(chip, struct().getPos((dx, -w/2)), struct().direction), length, w,
+        min(r_out, length),
+        roundCorners=[0, 1, 1, 0], hflip=flipped,
+        valign=const.BOTTOM, rotation=struct().direction,
+        bgcolor=bgcolor, **kwargs))
+
+    # Upper ground plane: starts at outer edge of upper gap (w/2 + s)
+    chip.add(RoundRect(
+        _originCompensatedInsert(chip, struct().getPos((dx, w/2 + s)), struct().direction), length, gnd_width,
+        min(r_out, length),
+        roundCorners=[0, 1, 1, 0], hflip=flipped,
+        valign=const.BOTTOM, rotation=struct().direction,
+        bgcolor=bgcolor, **kwargs))
+
+    # Lower ground plane: starts at outer edge of lower gap (w/2 + s)
+    chip.add(RoundRect(
+        _originCompensatedInsert(chip, struct().getPos((dx, -w/2 - s)), struct().direction), length, -gnd_width,
+        min(r_out, length),
+        roundCorners=[0, 1, 1, 0], hflip=flipped,
+        valign=const.TOP, rotation=struct().direction,
+        bgcolor=bgcolor, **kwargs),
+        structure=structure, length=length)
+
+def CPW_taper_pos(chip, structure, length=None, w0=None, s0=None, w1=None, s1=None,
+                  gnd_width=None, bgcolor=None, offset=(0, 0), **kwargs):
+    """
+    Positive CPW taper — draws metal directly instead of gaps.
+    """
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w0 is None:
+        try:
+            w0 = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+    if s0 is None:
+        try:
+            s0 = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+    if w1 is None:
+        try:
+            w1 = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+    if s1 is None:
+        try:
+            s1 = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+    if gnd_width is None:
+        try:
+            gnd_width = struct().defaults['gnd_width']
+        except KeyError:
+            gnd_width = max(s0, s1)
+    if length is None:
+        length = math.sqrt(3) * abs(w0/2 + s0 - w1/2 - s1)
+
+    # Center strip taper: starts at -w0/2, tapers to w1
+    chip.add(SkewRect(
+        _originCompensatedInsert(chip, struct().getPos((0, -w0/2)), struct().direction), length, w0,
+        (offset[0], (w1 - w0)/2 + offset[1]), w1,
+        rotation=struct().direction, valign=const.BOTTOM, edgeAlign=const.BOTTOM,
+        bgcolor=bgcolor, **kwargs))
+
+    # Upper ground plane taper: inner edge moves from w0/2+s0 to w1/2+s1
+    chip.add(SkewRect(
+        _originCompensatedInsert(chip, struct().getPos((0, w0/2 + s0)), struct().direction), length, gnd_width,
+        (offset[0], (w1/2 + s1) - (w0/2 + s0) + offset[1]), gnd_width,
+        rotation=struct().direction, valign=const.BOTTOM, edgeAlign=const.BOTTOM,
+        bgcolor=bgcolor, **kwargs))
+
+    # Lower ground plane taper: inner edge moves from -(w0/2+s0) to -(w1/2+s1)
+    chip.add(SkewRect(
+        _originCompensatedInsert(chip, struct().getPos((0, -w0/2 - s0)), struct().direction), length, -gnd_width,
+        (offset[0], (w0/2 + s0) - (w1/2 + s1) + offset[1]), -gnd_width,
+        rotation=struct().direction, valign=const.TOP, edgeAlign=const.TOP,
+        bgcolor=bgcolor, **kwargs),
+        structure=structure, offsetVector=(length + offset[0], offset[1]))
+
+def CPW_launcher_pos(chip, structure, l_taper=None, l_pad=0, l_gap=0, padw=300, pads=160,
+                     gnd_width=None, w=None, s=None, r_ins=0, r_out=0, bgcolor=None, **kwargs):
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if w is None:
+        try:
+            w = struct().defaults['w']
+        except KeyError:
+            print('\x1b[33mw not defined in ', chip.chipID, '!\x1b[0m')
+            return
+    if s is None:
+        try:
+            s = struct().defaults['s']
+        except KeyError:
+            print('\x1b[33ms not defined in ', chip.chipID, '!\x1b[0m')
+            return
+    if gnd_width is None:
+        try:
+            gnd_width = struct().defaults['gnd_width']
+        except KeyError:
+            gnd_width = pads  # default to pad gap width
+
+    CPW_stub_open_pos(chip, structure, length=max(l_gap, pads), r_out=r_out, r_ins=r_ins,
+                      w=padw, s=pads, gnd_width=gnd_width, flipped=True, bgcolor=bgcolor, **kwargs)
+    CPW_straight_pos(chip, structure, max(l_pad, padw), w=padw, s=pads,
+                     gnd_width=gnd_width, bgcolor=bgcolor, **kwargs)
+    CPW_taper_pos(chip, structure, length=l_taper, w0=padw, s0=pads, w1=w, s1=s,
+                  gnd_width=gnd_width, bgcolor=bgcolor, **kwargs)

@@ -843,16 +843,129 @@ def Snailmon3D(chip,
                     )
         add_dose_array(chip,
                     startpoint=(35950,4000),
-                    arraydims=(6,2), 
-                    arrayspacing=1000, 
-                    doses=None, 
+                    arraydims=(6,2),
+                    arrayspacing=1000,
+                    doses=None,
                     basedose=1000,
                     printdose=False,
                     qubit='SNAIL',
                     #layer='DOSEARRAY'
                     )
 
-def Fluxonium3D(chip, 
+def SQUIDCoupler(chip, structure, pad_width=800, pad_height=1400, pad_separation=200,
+                  loop_width=30, junction_kwargs=None, bgcolor=None, **kwargs):
+    '''
+    PLACEHOLDER two-junction (symmetric DC SQUID) coupler, matching the general
+    two-pad layout of arXiv:2503.13953 Fig. 10(b). There is no existing SQUID
+    (two-junction-in-parallel) pattern elsewhere in this codebase to adapt, so
+    this topology (two parallel junction arms forming a flux-threading loop
+    between two pads) was authored fresh.
+
+    Uses DolanJunction (shadow-evaporation style, built from plain Strip_pad/
+    Strip_straight/Strip_taper calls) for each arm rather than ManhattanJunction:
+    ManhattanJunction has an unrelated pre-existing origin_offset placement bug
+    (it draws via eager SolidPline calls affected by Chip.add()'s centering
+    shift, the same mechanism that broke Double_Y_balun's star and CPS_taper
+    before those were fixed) that hasn't been patched yet.
+
+    NOT CALIBRATED:
+    - Junction dimensions default to DolanJunction's own library defaults,
+      which have NOT been checked against this lab's actual dose/evaporation
+      calibration for a target critical current - override via
+      junction_kwargs (e.g. jfingerw, jgap, jpadw) once real numbers exist.
+    - loop_width/pad_separation set the loop's geometric size, but the
+      resulting inductance has not been simulated (the reference paper tunes
+      this via ANSYS HFSS) - treat these as a starting layout to refine.
+
+    Parameters
+    ----------
+    pad_width, pad_height : each of the two capacitor pads (rectangles)
+    pad_separation         : gap between the inner edges of the two pads,
+                              spanned by each DolanJunction arm
+    loop_width             : vertical separation between the two parallel
+                              junction arms (sets the loop's enclosed area)
+    junction_kwargs        : extra kwargs forwarded to both DolanJunction
+                              calls (e.g. jfingerw, jgap, jpadw) - both arms
+                              always get identical values, for a symmetric SQUID
+    '''
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+    if junction_kwargs is None:
+        junction_kwargs = {}
+
+    direction = struct().direction
+    half_gap = pad_separation / 2
+    half_loop = loop_width / 2
+
+    # Two big capacitor pads, straddling the gap where the SQUID loop/junctions sit
+    chip.add(dxf.rectangle(struct().getPos((-half_gap - pad_width, -pad_height/2)), pad_width, pad_height,
+                            rotation=direction, bgcolor=bgcolor, **kwargStrip(kwargs)))
+    chip.add(dxf.rectangle(struct().getPos((half_gap, -pad_height/2)), pad_width, pad_height,
+                            rotation=direction, bgcolor=bgcolor, **kwargStrip(kwargs)))
+
+    # Two parallel Dolan-bridge junction arms, symmetric (equal Ic) - together
+    # enclosing the flux-threading loop between the two pads
+    for sign in (+1, -1):
+        y = sign * half_loop
+        j_structure = m.Structure(chip, struct().getPos((0, y)), direction=direction)
+        DolanJunction(chip, j_structure, junctionl=pad_separation, bgcolor=bgcolor, **junction_kwargs)
+
+def ESDShortingLines(chip, structure, pad_width=800, pad_height=1400, pad_separation=200,
+                      line_width=10, line_length=1000, bar_width=None, bgcolor=None, **kwargs):
+    '''
+    ESD protection shorting lines matching arXiv:2503.13953 Fig. 10(c): thin
+    traces connecting each of SQUIDCoupler's two pads down to a common
+    grounding bar, shorting the SQUID pads together during fabrication and
+    handling to protect the junctions from electrostatic discharge. This only
+    draws the geometry - it doesn't implement any particular removal/dicing
+    step for later disconnecting the short, which is process-specific.
+
+    Call with the SAME structure/pad_width/pad_height/pad_separation used for
+    the matching SQUIDCoupler call so the lines start at the correct pads.
+
+    Parameters
+    ----------
+    line_length : distance from each pad down to the grounding bar
+    line_width  : width of each shorting line trace
+    bar_width   : width (length) of the grounding bar itself (defaults to
+                  spanning both pads plus some margin)
+    '''
+    def struct():
+        if isinstance(structure, m.Structure):
+            return structure
+        elif isinstance(structure, tuple):
+            return m.Structure(chip, structure)
+        else:
+            return chip.structure(structure)
+
+    if bgcolor is None:
+        bgcolor = chip.wafer.bg()
+
+    direction = struct().direction
+    half_gap = pad_separation / 2
+    pad_centers = [-half_gap - pad_width/2, half_gap + pad_width/2]
+
+    if bar_width is None:
+        bar_width = pad_separation + 2*pad_width + 200
+
+    # Grounding bar, centered below the coupler
+    chip.add(dxf.rectangle(struct().getPos((-bar_width/2, -pad_height/2 - line_length - line_width)),
+                            bar_width, line_width, rotation=direction, bgcolor=bgcolor, **kwargStrip(kwargs)))
+
+    # One thin line from each pad down to the bar
+    for x in pad_centers:
+        chip.add(dxf.rectangle(struct().getPos((x - line_width/2, -pad_height/2 - line_length)),
+                                line_width, line_length, rotation=direction, bgcolor=bgcolor, **kwargStrip(kwargs)))
+
+def Fluxonium3D(chip,
                 startpoint = (1500, 2350), 
                 addFlagPads=True, 
                 addLoop=True, 

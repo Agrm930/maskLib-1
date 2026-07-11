@@ -11,6 +11,7 @@ file_dir = os.path.dirname(__file__)
 
 import maskLib
 from dxfwrite.vector2d import vadd,midpoint,vmul_scalar,vsub
+from dxfwrite.algebra import rotate_2d
 import math
 import sys, subprocess, os, time
 import numpy as np
@@ -749,7 +750,7 @@ def generate_ft_coordinates(large_rect_length, large_rect_width, small_rect_leng
 
     return coordinates, quadrants, clockwises
 
-def add_fillet_polyline(chip, points, quadrants, clockwises, origin, outer_radius, inner_radius, layer):
+def add_fillet_polyline(chip, points, quadrants, clockwises, origin, outer_radius, inner_radius, layer, rotation=0):
     """
     Adds a filleted polyline to the design based on FT_points, etc.
     """
@@ -759,8 +760,17 @@ def add_fillet_polyline(chip, points, quadrants, clockwises, origin, outer_radiu
         radius = outer_radius if not clockwise else inner_radius
         filleted_points.extend(cornerRound(point, quadrant, radius, clockwise=clockwise))
 
-    # Add the polyline to the drawing
-    chip.add(SolidPline(origin, points=filleted_points, layer=layer))
+    if rotation:
+        rot_rad = math.radians(rotation)
+        filleted_points = [rotate_2d(p, rot_rad) for p in filleted_points]
+
+    # origin is an absolute, corner-based coordinate. Chip.add() shifts eager
+    # SolidPline .points by chip.origin_offset while they're still in their
+    # local (pre-rotation) frame - since we've already rotated the points
+    # above and pass rotation=0 to SolidPline itself, the correction here is
+    # just a plain subtraction (see Double_Y_balun's star for the same fix).
+    compensated_origin = (origin[0] - chip.origin_offset[0], origin[1] - chip.origin_offset[1])
+    chip.add(SolidPline(compensated_origin, points=filleted_points, layer=layer))
 
 def flux_transformer(chip,
     startpoint=(1565, 2200),
@@ -773,6 +783,7 @@ def flux_transformer(chip,
     X_offset=0,
     outer_radius=20,
     inner_radius=10,
+    rotation=0,
     layer='FT'
 ):
     """
@@ -790,6 +801,7 @@ def flux_transformer(chip,
     - X_offset: Offset for positioning.
     - outer_radius: Radius for outer fillets.
     - inner_radius: Radius for inner fillets.
+    - rotation: rotate the whole loop (degrees) about startpoint.
     - layer: Layer to draw the flux transformer.
     """
     FT_outer, FT_outer_quadrants, FT_outer_clockwises = generate_ft_coordinates(
@@ -806,7 +818,8 @@ def flux_transformer(chip,
         startpoint,
         outer_radius,
         inner_radius,
-        layer
+        layer,
+        rotation=rotation
         )
 
     add_fillet_polyline(chip,
@@ -816,7 +829,8 @@ def flux_transformer(chip,
         startpoint,
         inner_radius,
         outer_radius,
-        layer
+        layer,
+        rotation=rotation
         )
 
 
