@@ -159,6 +159,13 @@ class Wafer:
         #ignore private vars
     
     def save(self):
+        # stamp the creation/update date into the DXF header ($TDCREATE /
+        # $TDUPDATE are stored as Julian dates; CAD programs show them as
+        # the drawing's creation / last-saved time)
+        import time
+        julian_now = time.time() / 86400.0 + 2440587.5
+        self.drawing.header['$TDCREATE'] = julian_now
+        self.drawing.header['$TDUPDATE'] = julian_now
         self.drawing.save()
         print('Saved as: '+ '\x1b[36m' + self.path + self.fileName + '.dxf'+'\x1b[0m')
     
@@ -296,10 +303,17 @@ class Wafer:
         if center:
             self.chipPts =[[-self.chipX/2,-self.chipY/2]]
         else:
-            self.chipPts =[[0,0]]
+            # anchor the chip's bottom-left corner exactly at the DXF origin:
+            # writeChip shifts every insert by +sawWidth/2 (chipSpace), which
+            # centers a chip in its dicing cell on the full wafer but is an
+            # unwanted offset in a standalone single-chip DXF
+            self.chipPts =[[-self.sawWidth/2,-self.sawWidth/2]]
             
-        #setup the default chip
-        self.setDefaultChip()
+        # NOTE: no setDefaultChip() here -- Chip.save() sets the real chip as
+        # default right after initChipOnly. Creating a BLANK default here only
+        # polluted the standalone DXF with an unused CHIP_BLANK block whose
+        # frame rectangle had the parent wafer's chip size, which showed up as
+        # a phantom oversized outline in viewers that display all blocks (KLayout).
 
         #setup the viewport
         self.drawing.add_vport('*ACTIVE',ucs_icon=0,circle_zoom=1000,grid_on=1,center_point=(0,0),aspect_ratio=2*(max(self.chipX,self.chipY)))
@@ -576,11 +590,14 @@ class Chip:
             offset_points = [(point.x + offset_x, point.y + offset_y) for point in points]
             self.chipBlock.add(dxf.polyline(offset_points, layer=layer, flags=1))
 
-    def save(self, wafer, drawCopyDXF=False, dicingBorder=True, center=False, FRAME_LAYER=['703/0', 8, -1], MARKER_LAYER=['MARKERS', 5, -1]):
+    def save(self, wafer, drawCopyDXF=False, dicingBorder=True, center=False, FRAME_LAYER=['703/0', 8, -1], MARKER_LAYER=['MARKERS', 5, -1], fileName=None):
+        # fileName overrides the copy DXF's file name (default: wafer name + chip ID)
         wafer.drawing.blocks.add(self.chipBlock)
         if drawCopyDXF:
             # Make a copy DXF with only the chip
-            temp_wafer = Wafer(wafer.fileName + '_' + self.ID, wafer.path, 10, 10)
+            if fileName is None:
+                fileName = wafer.fileName + '_' + self.ID
+            temp_wafer = Wafer(fileName, wafer.path, 10, 10)
             # Height and width don't matter since the next line copies all settings
             temp_wafer.copyPropertiesFrom(wafer)
             temp_wafer.drawing.blocks.add(self.chipBlock)

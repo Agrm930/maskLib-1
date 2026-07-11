@@ -111,30 +111,6 @@ def dose_layer(base, params, dose_name):
     return base if v is None else '%s_%s' % (base, fmt_value(v))
 
 
-def export_ldt(path, entries):
-    '''
-    Write an Elionix layer dose table (.ldt) for ebeam lithography.
-
-    entries: iterable of (layer_number, dose) pairs. layer_number is the
-    numeric layer the DXF layer becomes after GDS conversion (= its index
-    in the wafer layer table, wafer.layerNums[name]). The dose is written
-    divided by 1000 with 3 decimals, per the Elionix format:
-
-        Dosetable V1.0
-        Dose Assignment by Layer
-        (2 ,   0.400)
-        ...
-
-    Returns the path written.
-    '''
-    with open(path, 'w') as f:
-        f.write('\nDosetable V1.0\nDose Assignment by Layer\n')
-        for num, dose in sorted(entries):
-            f.write('(%d ,   %.3f)\n' % (num, dose / 1000.0))
-        f.write('\n')
-    return path
-
-
 class Sweep3D:
     '''
     3D parameter sweep over a tiled field grid (see module docstring).
@@ -237,7 +213,8 @@ class Sweep3D:
 
     def ldt_entries(self, layer_number, base_doses=None):
         '''
-        (layer_number, dose) pairs for an Elionix dose table (see export_ldt).
+        (layer_number, dose) pairs for an Elionix dose table
+        (see maskLib.layerDoseTable.export_ldt).
 
         layer_number -- function mapping a layer NAME to its numeric layer,
                         e.g.  lambda name: wafer.layerNums[name]
@@ -326,17 +303,38 @@ class Sweep3D:
 
     # ---- export ----------------------------------------------------------
 
-    def export_workbook(self, path, grid_nx=None, grid_ny=None, strict=True):
+    def export_workbook(self, path, grid_nx=None, grid_ny=None, strict=True,
+                        layer_dose_table=None, param_defaults=None,
+                        constants=None, measured_columns=None):
         '''
         Write an .xlsx workbook (requires openpyxl) with:
 
           'parameters'  -- one row per field: label, ix, iy, and the value
-                           of every swept parameter (for analysis scripts)
+                           of every swept parameter (for analysis scripts).
+                           With param_defaults, NON-swept geometry appears
+                           as constant columns too, so each row fully
+                           describes its junction; with measured_columns,
+                           empty columns are appended for measurement entry.
+          'constants'   -- only if constants is given: name/value rows of
+                           process constants (resist stack, angle, doses...)
+                           making the workbook self-contained for analysis
           'map'         -- field labels laid out in cells matching their
                            position on the chip (top row = top of chip)
           one sheet per swept parameter -- its values laid out like the
                            chip, with a white->red min-to-max color gradient
                            so the sweep pattern is visible at a glance
+          'layer dose table' -- only if layer_dose_table is given: one row
+                           per DXF layer, (name, GDS layer number, whether
+                           it is written by ebeam / appears in the .ldt,
+                           dose). Pass rows of (name, gds, 'yes'/'no', dose);
+                           an optional 5th element (hex color like 'C6EFCE')
+                           fills the row for status highlighting.
+
+        param_defaults: {parameter_name: value} for geometry NOT being swept
+        (same units as drawn, i.e. um); swept parameters take precedence.
+        constants: {name: value} written to the 'constants' sheet.
+        measured_columns: list of empty column headers to append, or True
+        for the default ['R_N_ohm', 'exclude', 'measured_date'].
 
         Covers the reference grid by default; pass grid_nx/grid_ny (and
         strict=False) to export a secondary chip's smaller grid, e.g. a
@@ -354,14 +352,32 @@ class Sweep3D:
             return self.field(ix, iy, grid_nx=gx, grid_ny=gy, strict=strict)
 
         pnames = self.param_names()
+        # constant columns for geometry not being swept (swept ones win)
+        defaults = {k: v for k, v in (param_defaults or {}).items()
+                    if k not in pnames}
+        dnames = list(defaults)
+        if measured_columns is True:
+            measured_columns = ['R_N_ohm', 'exclude', 'measured_date']
+        mnames = list(measured_columns or [])
+
         wb = Workbook()
         ws = wb.active
         ws.title = 'parameters'
-        ws.append(['label', 'ix', 'iy'] + pnames)
+        ws.append(['label', 'ix', 'iy'] + pnames + dnames + mnames)
         for ix in range(gx):
             for iy in range(gy):
                 params, flabel = lookup(ix, iy)
-                ws.append([flabel, ix, iy] + [float(params[p]) for p in pnames])
+                ws.append([flabel, ix, iy]
+                          + [float(params[p]) for p in pnames]
+                          + [float(defaults[d]) for d in dnames]
+                          + [None] * len(mnames))
+
+        if constants:
+            s = wb.create_sheet('constants')
+            s.append(['name', 'value'])
+            for name, value in constants.items():
+                s.append([name, value])
+            s.column_dimensions['A'].width = 32
 
         def grid_sheet(title, cellvalue):
             '''new sheet laid out like the chip: columns = ix, rows = iy
@@ -382,6 +398,21 @@ class Sweep3D:
             s.conditional_formatting.add(data_range, ColorScaleRule(
                 start_type='min', start_color='FFFFFFFF',
                 end_type='max', end_color='FFFF4444'))
+
+        if layer_dose_table is not None:
+            from openpyxl.styles import PatternFill
+            s = wb.create_sheet('layer dose table')
+            s.append(['layer', 'GDS layer', 'ebeam (in .ldt)', 'dose'])
+            for row in layer_dose_table:
+                color = row[4] if len(row) > 4 else None
+                s.append(list(row[:4]))
+                if color:
+                    fill = PatternFill(start_color=color, end_color=color,
+                                       fill_type='solid')
+                    for cell in s[s.max_row]:
+                        cell.fill = fill
+            s.column_dimensions['A'].width = 20
+
         wb.save(path)
         return path
 
