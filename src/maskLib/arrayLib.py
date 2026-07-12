@@ -334,7 +334,8 @@ class Sweep3D:
         (same units as drawn, i.e. um); swept parameters take precedence.
         constants: {name: value} written to the 'constants' sheet.
         measured_columns: list of empty column headers to append, or True
-        for the default ['R_N_ohm', 'exclude', 'measured_date'].
+        for the default ['R_N_ohm', 'exclude', 'measured_date',
+        'SEM_width_nm', 'SEM_overlap_nm'] (probe station + SEM entry).
 
         Covers the reference grid by default; pass grid_nx/grid_ny (and
         strict=False) to export a secondary chip's smaller grid, e.g. a
@@ -357,7 +358,8 @@ class Sweep3D:
                     if k not in pnames}
         dnames = list(defaults)
         if measured_columns is True:
-            measured_columns = ['R_N_ohm', 'exclude', 'measured_date']
+            measured_columns = ['R_N_ohm', 'exclude', 'measured_date',
+                                'SEM_width_nm', 'SEM_overlap_nm']
         mnames = list(measured_columns or [])
 
         wb = Workbook()
