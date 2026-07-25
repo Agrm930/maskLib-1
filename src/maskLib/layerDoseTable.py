@@ -45,8 +45,14 @@ def export_ldt(path, entries):
     '''
     Write an Elionix layer dose table (.ldt) for ebeam lithography.
 
-    entries: iterable of (gds_layer_number, dose) pairs. The dose is
-    written divided by 1000 with 3 decimals, per the Elionix format:
+    entries: iterable of (gds_layer_number, dose) pairs, dose in uC/cm2.
+
+    CONVENTION: .ldt values are MULTIPLIERS of the base dose entered in
+    the Elionix schedule software, and this lab ALWAYS enters 1000
+    uC/cm2 there -- so intended absolute doses are written divided by
+    1000 (3 decimals) and the machine delivers ldt x 1000. Never enter a
+    different base dose: every dose (including swept/PEC D0 ladders) is
+    already baked into the ldt. Format:
 
         Dosetable V1.0
         Dose Assignment by Layer
