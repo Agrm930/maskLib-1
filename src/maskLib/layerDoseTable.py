@@ -100,18 +100,24 @@ def layer_dose_rows(wafer, sweep, base_doses, optical_layers=()):
     return rows
 
 
-def export_ldt_array(path, wafer, sweep, base_doses, optical_layers=()):
+def export_ldt_array(path, wafer, sweep, base_doses, optical_layers=(),
+                     optical_in_gds=True):
     '''
     Write the .ldt for a dose-array ebeam job (doses from a Sweep3D/Sweep2D
-    plus base_doses) and print which drawn-but-undosed ('yellow') layers
-    must be unselected in the Elionix CONV software when it combines the
-    GDS and this .ldt into the .car file.
+    plus base_doses) and print the CONV guidance for the drawn-but-undosed
+    ('yellow') layers.
+
+    optical_in_gds -- True (legacy exports): the chip GDS carries the
+        optical/guide layers, so CONV users must UNSELECT the printed list.
+        False (filtered exports, dxf_to_gds keep_layers=<ebeam only>): the
+        GDS holds only dosed layers, so there is nothing to unselect --
+        the message says so instead of warning.
 
     Array-specific: the doses come from a sweep. A future design with e.g.
     one qubit per chip would assemble its own (gds_layer, dose) entries and
     call the generic export_ldt directly.
 
-    Arguments as in layer_dose_rows. Returns the path written.
+    Other arguments as in layer_dose_rows. Returns the path written.
     '''
     export_ldt(path, sweep.ldt_entries(
         lambda name: gds_layer_number(wafer, name), base_doses))
@@ -120,7 +126,11 @@ def export_ldt_array(path, wafer, sweep, base_doses, optical_layers=()):
     yellow = ['%s (gds %d)' % (r[0], r[1])
               for r in layer_dose_rows(wafer, sweep, base_doses, optical_layers)
               if r[4] == XLSX_YELLOW]
-    if yellow:
+    if yellow and optical_in_gds:
         print('\x1b[33mNOT in the .ldt -- UNSELECT these in Elionix CONV '
               '(GDS + ldt -> .car):\n  %s\x1b[0m' % ', '.join(yellow))
+    elif yellow:
+        print('\x1b[32moptical/guide layers (%s) are EXCLUDED from the ebeam '
+              'GDS -- every GDS layer is dosed, nothing to unselect in '
+              'CONV.\x1b[0m' % ', '.join(r.split(' ')[0] for r in yellow))
     return path
