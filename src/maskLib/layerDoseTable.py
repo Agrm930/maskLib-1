@@ -7,12 +7,14 @@ Created on Sun Jul 5 2026
 
 Layer dose table utilities for ebeam lithography on an Elionix.
 
-The fab pipeline: the design DXF is converted to GDS (KLayout; every
-non-empty layer reaches the GDS), then the Elionix CONV software combines
-the GDS with a layer dose table (.ldt) into a .car job file. CONV rejects
-GDS layers that are missing from the .ldt as well as dose-0 entries, so
-layers that are drawn but not ebeam-written must be unselected in CONV --
-export_wafer_ldt prints which those are.
+The fab pipeline: the design DXF is converted to GDS (KLayout), then the
+Elionix CONV software combines the GDS with a layer dose table (.ldt)
+into a .car job file. CONV rejects GDS layers that are missing from the
+.ldt as well as dose-0 entries, so the write GDS should carry dosed
+layers only (dxf_to_gds keep_layers= -- how current design scripts
+export). On legacy full-layer GDS exports the drawn-but-undosed layers
+must instead be unselected in CONV -- export_ldt_array prints which
+(pass optical_in_gds=True for that legacy behavior).
 
 GDS layer numbering: the DXF->GDS converter numbers layers 1-based in
 wafer layer-table order, so GDS layer = wafer.layerNums[name] + 1
