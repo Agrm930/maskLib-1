@@ -438,7 +438,15 @@ class Wafer:
     #coordinates centered on corner of actual chip
     def chipSpace(self,xy):
         return (xy[0]+self.sawWidth/2,xy[1]+self.sawWidth/2)
-    
+
+    def placeChip(self, chip, pos):
+        '''insert a chip block on the wafer at pos = the chip's lower-left
+        corner in wafer-center coordinates (um), independent of the wafer
+        chip grid -- one wafer can mix chip sizes/designs this way. The
+        block must already be registered (chip.save(wafer) or populate).'''
+        self.drawing.add(dxf.insert(chip.ID, insert=self.chipSpace(pos),
+                                    layer=self.lyr(chip.layer)))
+
     #shortcut for add function
     def add(self,obj):
         self.drawing.add(obj)
@@ -501,15 +509,20 @@ from ezdxf.fonts.fonts import FontFace
 from maskLib.utilities import snap_to_grid
 
 class Chip:
-    def __init__(self, wafer, chipID, layer, structures=None, defaults=None, FRAME_NAME='703/0', grid_size_small=.005, grid_size_large=.050,centerChip=True):
+    def __init__(self, wafer, chipID, layer, structures=None, defaults=None, FRAME_NAME='703/0', grid_size_small=.005, grid_size_large=.050,centerChip=True, width=None, height=None, frame=None):
+        # width/height: the chip's own dimensions in um. Default (None) is the
+        # wafer's chip-grid slot size, but a chip is free to differ -- one wafer
+        # can carry several chip sizes (place them with wafer.placeChip).
+        # frame: draw the chip-boundary debug rectangle on FRAME_NAME; default
+        # (None) follows wafer.frame.
         self.wafer = wafer
-        self.width = wafer.chipX - wafer.sawWidth
-        self.height = wafer.chipY - wafer.sawWidth
+        self.width = width if width is not None else wafer.chipX - wafer.sawWidth
+        self.height = height if height is not None else wafer.chipY - wafer.sawWidth
         self.chipID = chipID  # String (usually)
         self.centerChip = centerChip
         self.ID = 'CHIP_' + str(chipID)
         self.solid = wafer.solid
-        self.frame = wafer.frame
+        self.frame = wafer.frame if frame is None else frame
         self.layer = layer
         
         self.grid_size_small = grid_size_small  # nm, default 5
@@ -534,7 +547,7 @@ class Chip:
             self.structures = structures
             
         # Add a debug frame for actual chip area
-        if wafer.frame:
+        if self.frame:
             # Frame at (0,0) - self.add() will apply origin_offset for centering
             self.add(dxf.rectangle((0, 0), self.width, self.height, layer=wafer.lyr(FRAME_NAME)))
 
