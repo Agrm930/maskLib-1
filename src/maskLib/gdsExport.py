@@ -15,6 +15,13 @@ always matches the .ldt dose table (see maskLib.layerDoseTable).
 Only layers that contain shapes exist in a GDS file (GDS has no layer
 table), so empty layers -- e.g. base layers of swept dose families --
 vanish in conversion automatically.
+
+Also home to the klayout-Layout export helpers used by write-file
+assembly scripts (2026-07-30, hoisted from jj_master's PEC array
+designs): write_layout (one Layout -> GDS + OASIS + optional .ldt) and
+split_layout (one master Layout -> a copy holding only the given GDS
+layer numbers, e.g. to split a write into a designs file and a labels
+file).
 """
 
 
@@ -67,3 +74,71 @@ def dxf_to_gds(dxf_path, gds_path, gds_layer_numbers, keep_layers=None):
 
     layout.write(gds_path)
     return gds_path
+
+
+def write_layout(layout, path_stem, formats=('gds', 'oas'), ldt_entries=None,
+                 quiet=False):
+    '''
+    Write one klayout Layout under every requested format, plus its dose
+    table if given.
+
+    layout      -- a klayout.db.Layout, fully assembled
+    path_stem   -- output path WITHOUT extension; each format appends its
+                   own (path/to/chip -> chip.gds, chip.oas, chip.ldt)
+    formats     -- iterable of klayout-writable extensions. The default
+                   writes both GDS (what Elionix CONV consumes) and OASIS
+                   (~30x smaller twin of the same layout; klayout picks
+                   the format from the extension).
+    ldt_entries -- optional iterable of (gds_layer_number, dose_uC_cm2)
+                   pairs, passed to maskLib.layerDoseTable.export_ldt.
+                   The caller owns the convention that every entry
+                   matches a GDS layer.
+
+    Returns the list of paths written, ldt last.
+    '''
+    import os
+
+    paths = []
+    for ext in formats:
+        p = path_stem + '.' + ext.lstrip('.')
+        layout.write(p)
+        paths.append(p)
+    if ldt_entries is not None:
+        from maskLib.layerDoseTable import export_ldt
+        paths.append(export_ldt(path_stem + '.ldt', ldt_entries))
+    if not quiet:
+        print('  %s: %s' % (os.path.basename(path_stem),
+                            ' / '.join('%s %.1f MB' % (os.path.splitext(p)[1][1:],
+                                                       os.path.getsize(p) / 1e6)
+                                       for p in paths)))
+    return paths
+
+
+def split_layout(layout, keep_layers):
+    '''
+    A copy of a klayout Layout holding ONLY the given GDS layer numbers.
+
+    The master layout is untouched: the copy keeps the full cell
+    hierarchy and instances, with every layer whose number is not in
+    keep_layers deleted (its shapes with it). Cells left empty by the
+    deletion still exist but contain nothing, which GDS/OASIS writers
+    handle fine.
+
+    Use to split one master write file into sequential-write parts (all
+    dose layers vs the label layers, one photolitho step per file, ...)
+    without rebuilding the geometry per part:
+
+        master = ...                      # one assembled Layout
+        designs = split_layout(master, range(10, 1418))
+        labels  = split_layout(master, (2, 3))
+
+    keep_layers -- iterable of GDS layer NUMBERS (datatype ignored)
+
+    Returns the new Layout.
+    '''
+    keep = set(int(n) for n in keep_layers)
+    ly = layout.dup()
+    for i in list(ly.layer_indexes()):
+        if ly.get_info(i).layer not in keep:
+            ly.delete_layer(i)
+    return ly
