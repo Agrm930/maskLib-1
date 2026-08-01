@@ -114,6 +114,33 @@ def write_layout(layout, path_stem, formats=('gds', 'oas'), ldt_entries=None,
     return paths
 
 
+def strip_zero_dose(layout, ldt_entries, min_dose=0.5):
+    '''
+    Drop zero-dose layers from a (Layout, ldt entries) pair before export.
+
+    A dvals ladder that includes relative dose 0 is the correct way to
+    let a PEC engine assign "write nothing here" (regions whose demand
+    is met entirely by backscatter from neighbours) -- but the Elionix
+    hates layers with dose zero, so they must not reach the machine.
+    This is the post-processing step: any layer whose dose is below
+    min_dose uC/cm2 (default 0.5, i.e. anything that would print as
+    0.000 in the 3-decimal ldt) is removed from BOTH the layout copy and
+    the entries. Skipping a zero-dose layer loses nothing physically:
+    dose 0 and "not written" are the same exposure.
+
+    ldt_entries -- iterable of (gds_layer_number, dose_uC_cm2)
+
+    Returns (stripped_layout, kept_entries, dropped_entries); the input
+    layout is untouched. Feed the first two to write_layout, and log the
+    third so travelers record what was dropped.
+    '''
+    entries = [(int(n), float(d)) for n, d in ldt_entries]
+    dropped = [(n, d) for n, d in entries if d < min_dose]
+    kept = [(n, d) for n, d in entries if d >= min_dose]
+    keep_nums = {n for n, _ in kept}
+    return split_layout(layout, keep_nums), kept, dropped
+
+
 def split_layout(layout, keep_layers):
     '''
     A copy of a klayout Layout holding ONLY the given GDS layer numbers.
