@@ -63,7 +63,9 @@ LABELS
 Every field gets a compact label:  <tile letter><column 2 digits><row 2 digits>
 e.g. 'A0103' = tile A, column 01, row 03. A Sweep2D has a single tile, so
 all its labels start with 'A'. Columns/rows are zero-padded to two digits
-('00'-'09', '10', ...).
+('00'-'09', '10', ...). Pass label_digits=1 for the short form 'A13'
+(tile A, column 1, row 3) -- only allowed when both tile dimensions are
+<= 10, so every column/row index is a single digit.
 
 TYPICAL USAGE
 =============
@@ -128,7 +130,7 @@ class Sweep3D:
 
     def __init__(self, grid_nx, grid_ny, tile_nx, tile_ny,
                  col=None, row=None, tile=None,
-                 geometry_params=None, dose_params=None):
+                 geometry_params=None, dose_params=None, label_digits=2):
         assert grid_nx % tile_nx == 0 and grid_ny % tile_ny == 0, (
             'Tile size %dx%d does not evenly fill the %dx%d field grid -- '
             'pick tile dimensions that divide the grid'
@@ -138,6 +140,12 @@ class Sweep3D:
         self.tiles_x = grid_nx // tile_nx    # tiles across
         self.tiles_y = grid_ny // tile_ny    # tiles up
         self.n_tiles = self.tiles_x * self.tiles_y
+        # digits per column/row index in field labels (2: 'A0103', 1: 'A13')
+        assert label_digits in (1, 2), 'label_digits must be 1 or 2'
+        assert max(tile_nx, tile_ny) <= 10 ** label_digits, (
+            'label_digits=%d cannot index a %dx%d tile without ambiguous labels'
+            % (label_digits, tile_nx, tile_ny))
+        self.label_digits = label_digits
         self.geometry_params = geometry_params or {}
         self.dose_params = dose_params or {}
 
@@ -185,7 +193,8 @@ class Sweep3D:
             params[pname] = vals[tj]
         for pname, vals in self.axes['tile'].items():
             params[pname] = vals[tile % len(vals)]
-        return params, '%s%02d%02d' % (index_letter(tile), ti, tj)
+        d = self.label_digits
+        return params, '%s%0*d%0*d' % (index_letter(tile), d, ti, d, tj)
 
     def param_names(self):
         '''sorted names of every swept parameter (all axes combined)'''
@@ -434,8 +443,8 @@ class Sweep2D(Sweep3D):
     '''
 
     def __init__(self, grid_nx, grid_ny, col=None, row=None,
-                 geometry_params=None, dose_params=None):
+                 geometry_params=None, dose_params=None, label_digits=2):
         Sweep3D.__init__(self, grid_nx, grid_ny, grid_nx, grid_ny,
                          col=col, row=row, tile=None,
                          geometry_params=geometry_params,
-                         dose_params=dose_params)
+                         dose_params=dose_params, label_digits=label_digits)

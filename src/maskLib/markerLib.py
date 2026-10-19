@@ -60,6 +60,54 @@ def MarkerCross(w,pos,size=(200,200),linewidth=80,bgcolor=None,layer=None,chipCe
     w.add(dxf.rectangle(vadd(pos,(0,linewidth/2)),linewidth,size[1]/2-linewidth/2,valign=const.TOP,halign=const.CENTER,bgcolor=bgcolor,layer=layer,**kwargStrip(kwargs)))
     w.add(dxf.rectangle(vadd(pos,(0,-linewidth/2)),linewidth,size[1]/2-linewidth/2,valign=const.BOTTOM,halign=const.CENTER,bgcolor=bgcolor,layer=layer,**kwargStrip(kwargs)))
 
+def MarkerCrossHollow(w,pos,size=(200,200),linewidth=80,border=20,bgcolor=None,layer=None,chipCentered=False,**kwargs):
+    '''
+    Outline cross: the MarkerCross footprint (size, linewidth) with a thinner
+    cross cut out of its middle, leaving a band `border` wide all the way
+    round. The cut-out cross has linewidth - 2*border and its arms stop
+    `border` short of the outer arm ends.
+
+    Drawn directly as 12 non-overlapping rectangles (no boolean ops):
+      horizontal arms: 4 side strips (each also covers one inner corner
+                       square of the centre) + 2 end caps
+      vertical arms:   4 side strips (from the centre square outward) + 2 end caps
+    '''
+    if layer is None:
+        layer = w.defaultLayer
+    else:
+        layer = w.lyr(layer)
+    if bgcolor is None:
+        bgcolor = w.bg(layer)
+    if chipCentered:
+        try:
+            pos = w.centered(pos)
+        except:
+            print('does not have centered argument')
+
+    a = linewidth / 2              # outer arm half-width
+    b = a - border                 # cut-out arm half-width
+    Lx, Ly = size[0] / 2, size[1] / 2      # outer arm half-lengths
+    lx, ly = Lx - border, Ly - border      # cut-out arm half-lengths
+    if not (0 < border < a):
+        raise ValueError('MarkerCrossHollow: border must be between 0 and linewidth/2')
+    if not (lx > a and ly > a):
+        raise ValueError('MarkerCrossHollow: arms too short for this border (need size/2 - border > linewidth/2)')
+
+    rects = []   # (x0, y0, x1, y1) relative to pos
+    for s in (1, -1):
+        # horizontal arm toward s*x: strips above/below the cut-out, then the end cap
+        rects.append((s * b, b, s * lx, a))
+        rects.append((s * b, -a, s * lx, -b))
+        rects.append((s * lx, -a, s * Lx, a))
+        # vertical arm toward s*y: strips left/right of the cut-out, then the end cap
+        rects.append((b, s * a, a, s * ly))
+        rects.append((-a, s * a, -b, s * ly))
+        rects.append((-a, s * ly, a, s * Ly))
+    for x0, y0, x1, y1 in rects:
+        w.add(dxf.rectangle(vadd(pos, (min(x0, x1), min(y0, y1))), abs(x1 - x0), abs(y1 - y0),
+                            valign=const.TOP, halign=const.LEFT,   # dxfwrite: TOP = rect extends up from insert
+                            bgcolor=bgcolor, layer=layer, **kwargStrip(kwargs)))
+
 # ===============================================================================
 # DRAW TEXT SHAPES
 # (adapted from slab maskmaker)  
