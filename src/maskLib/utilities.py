@@ -94,3 +94,49 @@ def snap_to_grid(pt, grid=None):
         return float(snapped)
     else:
         return snapped
+
+
+def grow_convex_polygon(points, d):
+    '''
+    Offset a convex polygon by d with mitred corners: d > 0 grows it
+    outward, d < 0 shrinks it inward, d = 0 returns it unchanged.
+    Straight-through corners (parallel neighbouring edges) are dropped
+    first. When shrinking collapses a short edge, that edge is dropped and
+    its neighbours meet in a point instead of crossing over.
+    points -- [(x, y), ...] in order (either winding)
+    '''
+    if d == 0:
+        return list(points)
+
+    def _cross(a, b, c):
+        return (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+    points = [q for i, q in enumerate(points)
+              if abs(_cross(points[i - 1], q, points[(i + 1) % len(points)])) > 1e-12]
+    n = len(points)
+    area2 = sum(points[i][0] * points[(i + 1) % n][1] - points[(i + 1) % n][0] * points[i][1]
+                for i in range(n))
+    sgn = 1 if area2 > 0 else -1          # CCW -> outward normal is (dy, -dx)
+    lines = []                            # each edge shifted by d along its outward normal
+    for i in range(n):
+        (x1, y1), (x2, y2) = points[i], points[(i + 1) % n]
+        dx, dy = x2 - x1, y2 - y1
+        L = (dx * dx + dy * dy) ** 0.5
+        nx, ny = sgn * dy / L, -sgn * dx / L
+        lines.append(((x1 + d * nx, y1 + d * ny), (dx, dy)))
+
+    def meet(a, b):                       # intersection of shifted edge lines a and b
+        (px, py), (ux, uy) = a
+        (qx, qy), (vx, vy) = b
+        t = ((qx - px) * vy - (qy - py) * vx) / (ux * vy - uy * vx)
+        return (px + t * ux, py + t * uy)
+
+    while True:
+        out = [meet(lines[i - 1], lines[i]) for i in range(len(lines))]
+        # edge i runs out[i] -> out[i+1]; reversed direction = collapsed edge
+        flipped = [i for i in range(len(lines))
+                   if (out[(i + 1) % len(lines)][0] - out[i][0]) * lines[i][1][0]
+                   + (out[(i + 1) % len(lines)][1] - out[i][1]) * lines[i][1][1] < 0]
+        if not flipped:
+            return out
+        assert len(lines) - len(flipped) >= 3, 'grow_convex_polygon: shrink collapses the polygon'
+        lines = [l for i, l in enumerate(lines) if i not in flipped]

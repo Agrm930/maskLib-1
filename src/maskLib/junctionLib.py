@@ -1325,6 +1325,80 @@ def Transmon3DWithShunt(chip, pos, padw=1500, padh=750, padw2=None, padh2=None, 
         print('You chose not flipped. This is not yet written, sorry.')
 
 
+def TransmonWrapShunt(chip, pos, padw, padh, separation, style='wrap4', width=5,
+                      gap=15, stub_inset=20, neck_width=None, neck_length=40, layer=None):
+    '''
+    Wrap-around shunt for a Transmon3DWithShunt(..., flipped=True, shunt=False)
+    pad pair: ONE unbranched wire round the outside of both pads, running
+    past pad sides at pad mid-height, so a probe landing horizontally on a
+    wrapped pad side crosses it at right angles and scratches it open (one
+    cut anywhere opens the shunt).
+      style 'wrap4': top pad right edge -> up the right -> over the top ->
+                     down the left -> under the bottom -> up the right ->
+                     bottom pad right edge (right side OPEN between the two
+                     stubs). Crossed on all four pad sides.
+      style 'wrap3': top pad left edge -> down the left -> under the bottom
+                     -> up the right -> bottom pad right edge. Crossed at
+                     top-left, bottom-left and bottom-right.
+    pos         -- bottom-left corner of the TOP pad (as passed to
+                   Transmon3DWithShunt); the bottom pad sits `separation` below
+    padw, padh  -- pad width/height
+    width       -- wire width
+    gap         -- pad edge to wire inner edge
+    stub_inset  -- stubs join the pads this far from the pad's top/bottom edge
+    neck_width  -- optional narrowed weak spot centred on each pad mid-height
+                   on every wrapped side (None = none), neck_length long
+    Drawn as plain rectangles, shifted by chip.origin_offset like the pads.
+    '''
+    assert style in ('wrap3', 'wrap4'), 'style must be wrap3 or wrap4'
+    if layer is None:
+        layer = chip.layer
+    w, g, inset = width, gap, stub_inset
+    ox, oy = chip.origin_offset
+    x0, x1 = pos[0] + ox, pos[0] + ox + padw                     # pad left/right edges
+    yt0, yt1 = pos[1] + oy, pos[1] + oy + padh                   # top pad bottom/top
+    yb1 = yt0 - separation                                       # bottom pad top
+    yb0 = yb1 - padh                                             # bottom pad bottom
+    top_mid, bot_mid = yt0 + padh / 2, yb0 + padh / 2
+    xl0, xl1 = x0 - g - w, x0 - g          # left wire
+    xr0, xr1 = x1 + g, x1 + g + w          # right wire
+    neck = neck_width is not None
+    if neck:
+        assert neck_width < w
+        # each neck must sit on its side's wire, clear of the stubs
+        assert bot_mid + neck_length / 2 < yb1 - inset - w, 'neck runs into the bottom stub'
+        if style == 'wrap4':
+            assert top_mid - neck_length / 2 > yt0 + inset + w, 'neck runs into the top stub'
+        else:
+            assert top_mid + neck_length / 2 < yt1 - inset - w, 'neck runs into the top stub'
+
+    def rect(xa, ya, xb, yb):
+        chip.add(dxf.rectangle((xa, ya), xb - xa, yb - ya, layer=layer))
+
+    def vwire(xa, xb, ya, yb, mids):
+        '''vertical wire x [xa, xb], y [ya, yb], narrowed around each y in mids'''
+        cuts = sorted((c - neck_length / 2, c + neck_length / 2) for c in mids) if neck else []
+        y = ya
+        for c0, c1 in cuts:
+            rect(xa, y, xb, c0)
+            xc = (xa + xb) / 2
+            rect(xc - neck_width / 2, c0, xc + neck_width / 2, c1)
+            y = c1
+        rect(xa, y, xb, yb)
+
+    if style == 'wrap4':
+        rect(x1, yt0 + inset, xr1, yt0 + inset + w)             # top stub (top pad right edge, low)
+        vwire(xr0, xr1, yt0 + inset + w, yt1 + g, [top_mid])    # right of top pad
+        rect(xl0, yt1 + g, xr1, yt1 + g + w)                    # over the top
+        vwire(xl0, xl1, yb0 - g, yt1 + g, [bot_mid, top_mid])   # left of both pads
+    else:   # wrap3
+        rect(xl0, yt1 - inset - w, x0, yt1 - inset)             # top stub (top pad left edge, high)
+        vwire(xl0, xl1, yb0 - g, yt1 - inset - w, [bot_mid, top_mid])   # left of both pads
+    rect(xl0, yb0 - g - w, xr1, yb0 - g)                        # under the bottom
+    vwire(xr0, xr1, yb0 - g, yb1 - inset - w, [bot_mid])        # right of bottom pad
+    rect(x1, yb1 - inset - w, xr1, yb1 - inset)                 # bottom stub (bottom pad right edge)
+
+
 def JProbePads(chip,structure,padwidth=250,separation=40,rotation=0,**kwargs):
     #cache the structure locally. needed since we call structure methods (shiftPos) on the structure
     thisStructure = None

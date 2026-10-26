@@ -558,6 +558,34 @@ def leads_for_tmon_dosearray_custom(chip, structure, start=(0,0),leadLpadtoconta
         print('toporbottom must be top or bottom')
     # print(lead_points)
 
+def lead_bandage(chip, xc, y_flat, toporbottom='top', contactW=20, contactL=10, wedgeL=10,
+                 leadW=1, extend=10, grow=0, layer='BANDAGE'):
+    '''
+    Bandage for one leads_for_tmon_dosearray_custom home plate (a second
+    ebeam write over it): the plate + wedge outline with its flat end pushed
+    `extend` further into the pad, then offset by `grow` on every side
+    (grow_convex_polygon: > 0 grows, < 0 shrinks, 0 = exact outline).
+    xc          -- centre line of the plate (chip coordinates, like the
+                   leads' drawstart)
+    y_flat      -- y of the plate's flat end (the leads' drawstart y with
+                   leadLpadtocontact=0)
+    toporbottom -- 'top' plate points down toward the junction, 'bottom' up
+    contactW, contactL, wedgeL, leadW -- as passed to the leads function
+    '''
+    from maskLib.utilities import grow_convex_polygon
+    assert toporbottom in ('top', 'bottom'), 'toporbottom must be top or bottom'
+    s = -1 if toporbottom == 'top' else 1   # from the flat end toward the junction
+    hw, lw = contactW / 2, leadW / 2
+    y_end = y_flat - s * extend                    # extended flat end, in the pad
+    y_sh = y_flat + s * contactL                   # plate/wedge shoulder
+    y_tip = y_flat + s * (contactL + wedgeL)       # wedge meets the thin lead
+    pts = grow_convex_polygon([(xc - hw, y_end), (xc + hw, y_end), (xc + hw, y_sh),
+                               (xc + lw, y_tip), (xc - lw, y_tip), (xc - hw, y_sh)], grow)
+    p = dxf.polyline(points=pts, bgcolor=chip.wafer.bg(), layer=layer)
+    p.close()
+    chip.add(p)
+
+
 def no_loop_leads(chip, structure, start=(0,0),leadL=100, leadW=1, contactpads=True, startshifty=1.5, contactW=20, contactL=10, wedgeL=10,  layer='lead', **kwargs):    
     if contactpads:
         # print(structure.getPos(start))
