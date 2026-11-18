@@ -241,8 +241,9 @@ class Sweep3D:
                     fam = self.dose_params[pname]
                     swept_families.add(fam)
                     for v in vals:
-                        entries.append((layer_number('%s_%s' % (fam, fmt_value(v))),
-                                        float(v)))
+                        entry = (layer_number('%s_%s' % (fam, fmt_value(v))), float(v))
+                        if entry not in entries:   # a value repeated along an axis
+                            entries.append(entry)  # is ONE layer: list it once
         for fam, dose in (base_doses or {}).items():
             if fam not in swept_families:
                 entries.append((layer_number(fam), float(dose)))

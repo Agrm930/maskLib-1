@@ -218,7 +218,18 @@ def junction_chain(chip, structure, n_junc_array=None, w=None, s=None, gap=None,
     struct().translatePos((0, +s/2))
 
 # A small JJ method for designs from the Chakram/Shankar Labs
-def smallJJ(chip, structure, gap=0.48, leadW = 1, fingerL=1.5, bigfingerW=0.41, smallfingerW=0.21, bridgeW=0.91, bridgeL=0.48, undercut=0.2, shiftL=0.5, **kwargs):
+def smallJJ(chip, structure, gap=0.48, leadW = 1, fingerL=1.5, bigfingerW=0.41, smallfingerW=0.21, bridgeW=0.91, bridgeL=0.48, undercut=0.2, shiftL=0.5,
+            undercutGap=0, undercutGapBig=None, **kwargs):
+    '''
+    undercutGap / undercutGapBig -- setback (um) between each finger's edge
+    and its two undercut strips (small / big finger; big defaults to the
+    small value). 0 = strips flush against the finger. A setback is the
+    ODUS-style option: overdose the strips but keep their own dose off the
+    finger edge, so the undercut clears without widening the finger. The
+    shift boxes move out with the strips.
+    '''
+    if undercutGapBig is None:
+        undercutGapBig = undercutGap
 
     # Jlayer="SJJLAYER", Ulayer='SULAYER', Slayer='SHIFT',
     Jlayer = kwargs.get('Jlayer', 'SJJLAYER')
@@ -263,12 +274,17 @@ def smallJJ(chip, structure, gap=0.48, leadW = 1, fingerL=1.5, bigfingerW=0.41, 
     # do undercut for U layer 
     undercutstruct.translatePos((startX+bridgeL/2, leadW/2), angle=0)
     # mw.CPW_taper(chip, undercut, length=0.5, w1 = j_length, w0 = leadW, s0 = bridgeW, s1 = bridgeW, layer = Ulayer)
-    mw.CPW_straight(chip, undercutstruct, w = smallfingerW, s = undercut, length = fingerL, layer = Ulayer)
+    # (CPW_straight's w = the unexposed centre: finger + setback each side)
+    innerS = smallfingerW + 2*undercutGap
+    innerB = bigfingerW + 2*undercutGapBig
+    assert leadW/2 - innerS/2 - undercut >= 0 and leadW/2 - innerB/2 - undercut >= 0, \
+        'finger + undercut setback + strips wider than the lead: no room for the shift boxes'
+    mw.CPW_straight(chip, undercutstruct, w = innerS, s = undercut, length = fingerL, layer = Ulayer)
     undercutstruct_big = structure.clone()
     undercutstruct_big.translatePos((startX-bridgeL/2, leadW/2), angle=0)
-    mw.CPW_straight(chip, undercutstruct_big, w = bigfingerW, s = undercut, length = -fingerL, layer = Ulayer)
-    mw.CPW_straight(chip, undercutstruct, w = smallfingerW+2*undercut, s = leadW/2-smallfingerW/2-undercut, length = -shiftL, layer = Slayer)
-    mw.CPW_straight(chip, undercutstruct_big, w = bigfingerW+2*undercut, s = leadW/2-bigfingerW/2-undercut, length = shiftL, layer = Slayer)
+    mw.CPW_straight(chip, undercutstruct_big, w = innerB, s = undercut, length = -fingerL, layer = Ulayer)
+    mw.CPW_straight(chip, undercutstruct, w = innerS+2*undercut, s = leadW/2-innerS/2-undercut, length = -shiftL, layer = Slayer)
+    mw.CPW_straight(chip, undercutstruct_big, w = innerB+2*undercut, s = leadW/2-innerB/2-undercut, length = shiftL, layer = Slayer)
 
     # # do second undercut near bridge
     # if gap < bridgeW:
